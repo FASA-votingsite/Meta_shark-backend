@@ -17,8 +17,24 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
+from django.http import JsonResponse
+from django.views import View
+
+class RootView(View):
+    def get(self, request):
+        return JsonResponse({
+            "message": "content-monetization-platform API is running!",
+            "endpoints": {
+                "admin": "/admin/",
+                "api": "/api/",  # if you have API routes
+            },
+            "status": "active"
+        })
 
 urlpatterns = [
+    path('', RootView.as_view(), name='root'),
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
 ]
