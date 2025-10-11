@@ -29,17 +29,6 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'Meta@adminweb')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Static files (CSS, JavaScript, Images)
-
-
-
-# Additional locations of static files
-STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'static'),
-]
-
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
 SECRET_KEY = 'your-secret-key-here'
 
 DEBUG = config('DEBUG', default=False, cast=bool)
