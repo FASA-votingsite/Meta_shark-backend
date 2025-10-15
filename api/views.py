@@ -61,12 +61,8 @@ class LoginView(APIView):
         username = request.data.get('username')
         password = request.data.get('password')
         
-        print("=" * 50)
-        print("LOGIN ATTEMPT RECEIVED")
-        print(f"Username: {username}")
-        print(f"Password provided: {'*' * len(password) if password else 'None'}")
-        print(f"Request data: {request.data}")
-        print("=" * 50)
+        print(f"🔐 Login attempt for: {username}")
+        print(f"📦 Request data: {request.data}")
         
         if not username or not password:
             print("❌ Missing username or password")
@@ -76,32 +72,22 @@ class LoginView(APIView):
             )
         
         # Check if user exists
-        try:
-            user_exists = User.objects.filter(username=username).exists()
-            print(f"✅ User exists in database: {user_exists}")
-        except Exception as e:
-            print(f"❌ Error checking user existence: {e}")
+        user_exists = User.objects.filter(username=username).exists()
+        print(f"👤 User exists: {user_exists}")
         
         user = authenticate(username=username, password=password)
-        
-        print(f"🔐 Authentication result: {user}")
+        print(f"🔑 Authentication result: {user}")
         
         if user:
-            print(f"✅ Authentication SUCCESSFUL for: {user.username}")
+            print(f"✅ Login successful for: {user.username}")
             
-            # Get or create token
             try:
+                # Get or create token
+                from rest_framework.authtoken.models import Token
                 token, created = Token.objects.get_or_create(user=user)
-                print(f"🔑 Token: {'Created' if created else 'Exists'} - {token.key[:10]}...")
-            except Exception as e:
-                print(f"❌ Token error: {e}")
-                return Response(
-                    {"error": "Token creation failed"}, 
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-            # Get user profile
-            try:
+                print(f"🎟️ Token: {token.key[:10]}...")
+                
+                # Get user profile
                 profile = UserProfile.objects.get(user=user)
                 user_data = {
                     'id': user.id,
@@ -111,38 +97,35 @@ class LoginView(APIView):
                     'wallet_balance': float(profile.wallet_balance),
                     'phone_number': profile.phone_number
                 }
-                print(f"📊 User profile found: {user_data}")
-            except UserProfile.DoesNotExist:
-                print("⚠️ No user profile found, creating basic user data")
-                user_data = {
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email
-                }
-            
-            print("🎉 Login successful, returning response")
-            return Response({
-                'token': token.key,
-                'user': user_data
-            })
+                
+                return Response({
+                    'token': token.key,
+                    'user': user_data
+                })
+                
+            except Exception as e:
+                print(f"❌ Error in login process: {str(e)}")
+                return Response(
+                    {"error": "Login processing error"}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
         else:
-            print("❌ Authentication FAILED")
-            print("Possible reasons:")
-            print("1. Wrong password")
-            print("2. User doesn't exist") 
-            print("3. Authentication backend issue")
+            print(f"❌ Authentication failed for: {username}")
             return Response(
                 {"error": "Invalid username or password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+                        
 class ValidateCouponView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
         coupon_code = request.data.get('coupon_code')
         
+        print(f"🎫 Coupon validation request: {coupon_code}")
+        
         if not coupon_code:
+            print("❌ No coupon code provided")
             return Response(
                 {"error": "Coupon code is required"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -150,6 +133,7 @@ class ValidateCouponView(APIView):
         
         try:
             coupon = Coupon.objects.get(coupon_code=coupon_code, is_used=False)
+            print(f"✅ Valid coupon found: {coupon.coupon_code} for {coupon.package.name}")
             return Response({
                 'valid': True,
                 'package': {
@@ -159,11 +143,18 @@ class ValidateCouponView(APIView):
                 }
             })
         except Coupon.DoesNotExist:
+            print(f"❌ Invalid or used coupon: {coupon_code}")
             return Response({
                 'valid': False,
                 'error': 'Invalid or used coupon code'
             }, status=status.HTTP_400_BAD_REQUEST)
-
+        except Exception as e:
+            print(f"❌ Coupon validation error: {str(e)}")
+            return Response({
+                'valid': False,
+                'error': 'Server error during coupon validation'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -244,7 +235,15 @@ class CouponViewSet(viewsets.ModelViewSet):
 class PackageViewSet(viewsets.ModelViewSet):
     queryset = Package.objects.all()
     serializer_class = PackageSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [AllowAny]  # Important: Allow anyone to view packages
+    
+    # Add this to handle GET requests properly
+    def list(self, request, *args, **kwargs):
+        print("📦 Packages list requested")  # Debug
+        packages = Package.objects.all()
+        print(f"📦 Found {packages.count()} packages")  # Debug
+        serializer = self.get_serializer(packages, many=True)
+        return Response(serializer.data)
 
 class UserProfileViewSet(viewsets.ModelViewSet):
     serializer_class = UserProfileSerializer
