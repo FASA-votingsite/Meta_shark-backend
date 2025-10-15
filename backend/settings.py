@@ -52,7 +52,8 @@ CSRF_TRUSTED_ORIGINS = [
     'https://unpotent-cosmically-era.ngrok-free.dev',
     'https://*.ngrok-free.dev',
     'https://*.ngrok.io',
-    "http://localhost:3000",
+    'http://localhost:3000',  # Your React frontend URL
+    'http://127.0.0.1:3000'
     "https://*.onrender.com",
     "https://content-monetization-platform.netlify.app"
 ]

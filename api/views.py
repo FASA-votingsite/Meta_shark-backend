@@ -61,17 +61,44 @@ class LoginView(APIView):
         username = request.data.get('username')
         password = request.data.get('password')
         
+        print("=" * 50)
+        print("LOGIN ATTEMPT RECEIVED")
+        print(f"Username: {username}")
+        print(f"Password provided: {'*' * len(password) if password else 'None'}")
+        print(f"Request data: {request.data}")
+        print("=" * 50)
+        
         if not username or not password:
+            print("❌ Missing username or password")
             return Response(
                 {"error": "Please provide both username and password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Check if user exists
+        try:
+            user_exists = User.objects.filter(username=username).exists()
+            print(f"✅ User exists in database: {user_exists}")
+        except Exception as e:
+            print(f"❌ Error checking user existence: {e}")
+        
         user = authenticate(username=username, password=password)
         
+        print(f"🔐 Authentication result: {user}")
+        
         if user:
+            print(f"✅ Authentication SUCCESSFUL for: {user.username}")
+            
             # Get or create token
-            token, created = Token.objects.get_or_create(user=user)
+            try:
+                token, created = Token.objects.get_or_create(user=user)
+                print(f"🔑 Token: {'Created' if created else 'Exists'} - {token.key[:10]}...")
+            except Exception as e:
+                print(f"❌ Token error: {e}")
+                return Response(
+                    {"error": "Token creation failed"}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             
             # Get user profile
             try:
@@ -84,23 +111,31 @@ class LoginView(APIView):
                     'wallet_balance': float(profile.wallet_balance),
                     'phone_number': profile.phone_number
                 }
+                print(f"📊 User profile found: {user_data}")
             except UserProfile.DoesNotExist:
+                print("⚠️ No user profile found, creating basic user data")
                 user_data = {
                     'id': user.id,
                     'username': user.username,
                     'email': user.email
                 }
             
+            print("🎉 Login successful, returning response")
             return Response({
                 'token': token.key,
                 'user': user_data
             })
         else:
+            print("❌ Authentication FAILED")
+            print("Possible reasons:")
+            print("1. Wrong password")
+            print("2. User doesn't exist") 
+            print("3. Authentication backend issue")
             return Response(
                 {"error": "Invalid username or password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+        
 class ValidateCouponView(APIView):
     permission_classes = [AllowAny]
     
