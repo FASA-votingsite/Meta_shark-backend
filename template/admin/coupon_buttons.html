@@ -1,0 +1,20 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+    <div class="module">
+        <h2>Coupon Generation</h2>
+        <div style="margin: 20px 0;">
+            <a href="{% url 'admin:generate_pro_coupon' %}" class="button" style="padding: 10px 15px; margin-right: 10px; background: #417690; color: white; text-decoration: none;">
+                Generate Pro Coupon
+            </a>
+            <a href="{% url 'admin:generate_silver_coupon' %}" class="button" style="padding: 10px 15px; background: #417690; color: white; text-decoration: none;">
+                Generate Silver Coupon
+            </a>
+        </div>
+    </div>
+    
+    {{ block.super }}
+</div>
+{% endblock %}

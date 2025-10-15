@@ -6,7 +6,6 @@ from decimal import Decimal
 
 # Create your models here.
 
-
 class Package(models.Model):
     PACKAGE_TYPES = [
         ('pro', 'Pro Package'),
@@ -25,11 +24,11 @@ class Package(models.Model):
     daily_game_bonus = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     withdrawal_priority = models.IntegerField(default=1)  # Lower number = higher priority
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.name} - ₦{self.price}"
 
 class Coupon(models.Model):
-    coupon_code = models.CharField(max_length=20, unique=True)
+    coupon_code = models.CharField(max_length=22, unique=True)  # Increased for metapro/sil + 15 digits
     package = models.ForeignKey(Package, on_delete=models.CASCADE)
     is_used = models.BooleanField(default=False)
     used_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -37,26 +36,15 @@ class Coupon(models.Model):
     used_at = models.DateTimeField(null=True, blank=True)
     price_paid = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
-    @classmethod
-    def generate_coupon(cls, package, price_paid=None):
-        """Generate a unique coupon code"""
-        code = f"META{secrets.token_hex(3).upper()}"
-        while cls.objects.filter(coupon_code=code).exists():
-            code = f"META{secrets.token_hex(3).upper()}"
-        return cls.objects.create(
-            coupon_code=code, 
-            package=package,
-            price_paid=price_paid or package.price
-        )
-    
-    def _str_(self):
+    def __str__(self):
         return f"{self.coupon_code} - {self.package.name}"
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     package = models.ForeignKey(Package, on_delete=models.SET_NULL, null=True)
-    referral_code = models.CharField(max_length=20, unique=True)
+    referral_code = models.CharField(max_length=20, unique=True, null=True, blank=True)
     referred_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals')
+    phone_number = models.CharField(max_length=20, null=True, blank=True)  # WhatsApp number field
     wallet_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     total_earnings = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     last_daily_login = models.DateTimeField(null=True, blank=True)
@@ -65,9 +53,12 @@ class UserProfile(models.Model):
     def save(self, *args, **kwargs):
         if not self.referral_code:
             self.referral_code = f"REF{secrets.token_hex(3).upper()}"
+            # Ensure uniqueness
+            while UserProfile.objects.filter(referral_code=self.referral_code).exists():
+                self.referral_code = f"REF{secrets.token_hex(3).upper()}"
         super().save(*args, **kwargs)
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.user.username} - {self.package.name if self.package else 'No Package'}"
 
 class ContentSubmission(models.Model):
@@ -100,7 +91,6 @@ class ContentSubmission(models.Model):
                 'tiktok': Decimal('500'),
                 'instagram': Decimal('400'),
                 'facebook': Decimal('300'),
-                'twitter': Decimal('350')
             }
             self.earnings = platform_earnings.get(self.platform, Decimal('200'))
             
@@ -121,7 +111,7 @@ class ContentSubmission(models.Model):
         
         super().save(*args, **kwargs)
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.user.username} - {self.platform}"
 
 class Referral(models.Model):
@@ -155,7 +145,7 @@ class Referral(models.Model):
         
         super().save(*args, **kwargs)
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.referrer.username} → {self.referee.username}"
 
 class GameParticipation(models.Model):
@@ -189,7 +179,7 @@ class GameParticipation(models.Model):
         
         super().save(*args, **kwargs)
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.user.username} - {self.game_type}"
 
 class Transaction(models.Model):
@@ -208,7 +198,7 @@ class Transaction(models.Model):
     description = models.TextField()
     date = models.DateTimeField(auto_now_add=True)
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.user.username} - {self.transaction_type} - ₦{self.amount}"
 
 class WithdrawalRequest(models.Model):
@@ -235,5 +225,5 @@ class WithdrawalRequest(models.Model):
             return self.user.userprofile.package.withdrawal_priority
         return 2  # Default priority
     
-    def _str_(self):
+    def __str__(self):
         return f"{self.user.username} - ₦{self.amount} - {self.status}"

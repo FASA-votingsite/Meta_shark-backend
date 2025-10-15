@@ -6,19 +6,19 @@ from .models import *
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', "phone_number")
 
 class PackageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Package
-        fields = '_all_'
+        fields = '__all__'
 
 class CouponSerializer(serializers.ModelSerializer):
     package = PackageSerializer(read_only=True)
     
     class Meta:
         model = Coupon
-        fields = '_all_'
+        fields = '__all__'
 
 class UserProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -26,14 +26,14 @@ class UserProfileSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = UserProfile
-        fields = '_all_'
+        fields = '__all__'
 
 class ContentSubmissionSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     
     class Meta:
         model = ContentSubmission
-        fields = '_all_'
+        fields = '__all__'
         read_only_fields = ('user', 'submission_date', 'earnings')
 
 class ReferralSerializer(serializers.ModelSerializer):
@@ -42,14 +42,14 @@ class ReferralSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Referral
-        fields = '_all_'
+        fields = '__all__'
 
 class GameParticipationSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     
     class Meta:
         model = GameParticipation
-        fields = '_all_'
+        fields = '__all__'
         read_only_fields = ('user', 'participation_date')
 
 class TransactionSerializer(serializers.ModelSerializer):
@@ -57,7 +57,7 @@ class TransactionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Transaction
-        fields = '_all_'
+        fields = '__all__'
         read_only_fields = ('user', 'date')
 
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
@@ -66,37 +66,134 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = WithdrawalRequest
-        fields = '_all_'
+        fields = '__all__'
         read_only_fields = ('user', 'status', 'created_at', 'processed_at')
 
 class SignupSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, min_length=6)
     confirm_password = serializers.CharField(write_only=True)
     coupon_code = serializers.CharField()
     referral_code = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True, max_length=20)
     
     def validate(self, data):
+        # Password validation
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError("Passwords do not match")
         
+        if len(data['password']) < 6:
+            raise serializers.ValidationError("Password must be at least 6 characters long")
+        
+        # Username validation
         if User.objects.filter(username=data['username']).exists():
             raise serializers.ValidationError("Username already exists")
         
+        # Email validation
         if User.objects.filter(email=data['email']).exists():
             raise serializers.ValidationError("Email already exists")
         
-        # Validate coupon
+        # Coupon validation
         try:
             coupon = Coupon.objects.get(coupon_code=data['coupon_code'], is_used=False)
+            data['coupon'] = coupon  # Store coupon instance for use in create method
         except Coupon.DoesNotExist:
             raise serializers.ValidationError("Invalid or used coupon code")
         
+        # Referral code validation (if provided)
+        if data.get('referral_code'):
+            try:
+                referrer_profile = UserProfile.objects.get(referral_code=data['referral_code'])
+                data['referrer'] = referrer_profile.user
+            except UserProfile.DoesNotExist:
+                raise serializers.ValidationError("Invalid referral code")
+        
         return data
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField()
 
 class DailyLoginSerializer(serializers.Serializer):
     pass
 
 class GamePlaySerializer(serializers.Serializer):
     game_type = serializers.ChoiceField(choices=GameParticipation.GAME_CHOICES)
+
+class CouponValidationSerializer(serializers.Serializer):
+    coupon_code = serializers.CharField(max_length=22)
+    
+    def validate_coupon_code(self, value):
+        """Validate coupon code format and existence"""
+        value = value.strip().lower()
+        
+        # Check if coupon exists and is not used
+        try:
+            coupon = Coupon.objects.get(coupon_code=value, is_used=False)
+            return value
+        except Coupon.DoesNotExist:
+            raise serializers.ValidationError("Invalid or used coupon code")
+
+class ContentSubmissionCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContentSubmission
+        fields = ('platform', 'video_url', 'description')
+    
+    def validate_video_url(self, value):
+        """Basic URL validation for video platforms"""
+        if not value.startswith(('http://', 'https://')):
+            raise serializers.ValidationError("Please provide a valid URL")
+        return value
+
+class WithdrawalRequestCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WithdrawalRequest
+        fields = ('amount', 'bank_name', 'account_number', 'account_name')
+    
+    def validate_amount(self, value):
+        """Validate withdrawal amount"""
+        if value <= 0:
+            raise serializers.ValidationError("Withdrawal amount must be greater than 0")
+        
+        # In practice, you'd check if user has sufficient balance
+        # This would be done in the view
+        return value
+
+class PasswordChangeSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, min_length=6)
+    confirm_new_password = serializers.CharField(required=True)
+    
+    def validate(self, data):
+        if data['new_password'] != data['confirm_new_password']:
+            raise serializers.ValidationError("New passwords do not match")
+        return data
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email')
+    first_name = serializers.CharField(source='user.first_name', required=False)
+    last_name = serializers.CharField(source='user.last_name', required=False)
+    
+    class Meta:
+        model = UserProfile
+        fields = ('phone_number', 'email', 'first_name', 'last_name')
+    
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop('user', {})
+        
+        # Update user fields
+        user = instance.user
+        if 'email' in user_data:
+            user.email = user_data['email']
+        if 'first_name' in user_data:
+            user.first_name = user_data['first_name']
+        if 'last_name' in user_data:
+            user.last_name = user_data['last_name']
+        user.save()
+        
+        # Update profile fields
+        instance.phone_number = validated_data.get('phone_number', instance.phone_number)
+        instance.save()
+        
+        return instance

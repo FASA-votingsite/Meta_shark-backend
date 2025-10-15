@@ -33,8 +33,18 @@ class RootView(View):
             "status": "active"
         })
 
-urlpatterns = [
+"""urlpatterns = [
     path('', RootView.as_view(), name='root'),
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
+]"""
+
+urlpatterns = [
+    path('', RootView.as_view(), name='root'),
+    path('admin/', admin.site.urls),
+    path('', include('api.urls')),  # Make sure this includes your API URLs
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

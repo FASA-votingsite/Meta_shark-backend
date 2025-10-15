@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from api.models import Package
+from META_SHARK_ADMIN.models import Package
 
 class Command(BaseCommand):
     help = 'Create initial META_SHARK packages'
