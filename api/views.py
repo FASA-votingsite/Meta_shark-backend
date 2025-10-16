@@ -2,7 +2,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -15,44 +15,67 @@ class AuthView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
-        serializer = SignupSerializer(data=request.data)
-        if serializer.is_valid():
-            # Create user
-            user = User.objects.create_user(
-                username=serializer.validated_data['username'],
-                email=serializer.validated_data['email'],
-                password=serializer.validated_data['password']
-            )
-            
-            # Create user profile
-            profile = UserProfile.objects.create(
-                user=user,
-                phone_number=serializer.validated_data.get('phone_number', '')
-            )
-            
-            # Mark coupon as used
-            coupon = serializer.validated_data['coupon']
-            coupon.is_used = True
-            coupon.used_by = user
-            coupon.save()
-            
-            # Assign package to user
-            profile.package = coupon.package
-            profile.save()
-            
-            # Create token
-            token = Token.objects.create(user=user)
-            
-            return Response({
-                'token': token.key,
-                'user': {
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email
-                }
-            }, status=status.HTTP_201_CREATED)
+        print("📝 Registration request received:", request.data)
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer = SignupSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            print("✅ Serializer is valid")
+            
+            try:
+                # Create user
+                user = User.objects.create_user(
+                    username=serializer.validated_data['username'],
+                    email=serializer.validated_data['email'],
+                    password=serializer.validated_data['password']
+                )
+                print(f"✅ User created: {user.username}")
+                
+                # Create user profile
+                profile = UserProfile.objects.create(
+                    user=user,
+                    phone_number=serializer.validated_data.get('phone_number', '')
+                )
+                print(f"✅ Profile created for: {user.username}")
+                
+                # Mark coupon as used
+                coupon = serializer.validated_data['coupon']
+                coupon.is_used = True
+                coupon.used_by = user
+                coupon.save()
+                print(f"✅ Coupon marked as used: {coupon.coupon_code}")
+                
+                # Assign package to user
+                profile.package = coupon.package
+                profile.save()
+                print(f"✅ Package assigned: {coupon.package.name}")
+                
+                # Create token
+                token = Token.objects.create(user=user)
+                print(f"✅ Token created: {token.key}")
+                
+                return Response({
+                    'token': token.key,
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email,
+                        'package': profile.package.name if profile.package else None,
+                        'wallet_balance': float(profile.wallet_balance),
+                        'phone_number': profile.phone_number
+                    }
+                }, status=status.HTTP_201_CREATED)
+                
+            except Exception as e:
+                print(f"❌ Error during registration: {str(e)}")
+                return Response(
+                    {"error": f"Registration failed: {str(e)}"}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        else:
+            print("❌ Serializer errors:", serializer.errors)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -83,7 +106,6 @@ class LoginView(APIView):
             
             try:
                 # Get or create token
-                from rest_framework.authtoken.models import Token
                 token, created = Token.objects.get_or_create(user=user)
                 print(f"🎟️ Token: {token.key[:10]}...")
                 
@@ -115,7 +137,7 @@ class LoginView(APIView):
                 {"error": "Invalid username or password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-                        
+
 class ValidateCouponView(APIView):
     permission_classes = [AllowAny]
     
@@ -154,62 +176,98 @@ class ValidateCouponView(APIView):
                 'valid': False,
                 'error': 'Server error during coupon validation'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_token(request):
+    """Verify that the token is valid"""
+    return Response({
+        'valid': True,
+        'user': {
+            'id': request.user.id,
+            'username': request.user.username,
+            'email': request.user.email
+        }
+    })
+
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        profile = UserProfile.objects.get(user=request.user)
-        submissions = ContentSubmission.objects.filter(user=request.user)
-        referrals = Referral.objects.filter(referrer=request.user)
-        
-        data = {
-            'wallet_balance': float(profile.wallet_balance),
-            'total_earnings': float(profile.total_earnings),
-            'package': PackageSerializer(profile.package).data if profile.package else None,
-            'submission_count': submissions.count(),
-            'referral_count': referrals.count(),
-        }
-        return Response(data)
+        try:
+            profile = UserProfile.objects.get(user=request.user)
+            submissions = ContentSubmission.objects.filter(user=request.user)
+            referrals = Referral.objects.filter(referrer=request.user)
+            
+            data = {
+                'wallet_balance': float(profile.wallet_balance),
+                'total_earnings': float(profile.total_earnings),
+                'package': PackageSerializer(profile.package).data if profile.package else None,
+                'submission_count': submissions.count(),
+                'referral_count': referrals.count(),
+                'recent_transactions': TransactionSerializer(
+                    Transaction.objects.filter(user=request.user).order_by('-date')[:5],
+                    many=True
+                ).data,
+                'referral_stats': {
+                    'total_referrals': referrals.count(),
+                    'total_earned': float(sum([r.reward_earned for r in referrals]))
+                }
+            }
+            return Response(data)
+        except Exception as e:
+            print(f"❌ Dashboard error: {str(e)}")
+            return Response(
+                {"error": "Failed to load dashboard data"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
-        profile = UserProfile.objects.get(user=request.user)
-        
-        # Check if user already claimed daily login today
-        today = timezone.now().date()
-        if profile.last_daily_login and profile.last_daily_login.date() == today:
+        try:
+            profile = UserProfile.objects.get(user=request.user)
+            
+            # Check if user already claimed daily login today
+            today = timezone.now().date()
+            if profile.last_daily_login and profile.last_daily_login.date() == today:
+                return Response({
+                    'error': 'Daily login bonus already claimed today'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Add daily login bonus
+            if profile.package:
+                bonus_amount = profile.package.daily_login_bonus
+                profile.wallet_balance += bonus_amount
+                profile.total_earnings += bonus_amount
+                profile.last_daily_login = timezone.now()
+                profile.save()
+                
+                # Create transaction record
+                Transaction.objects.create(
+                    user=request.user,
+                    amount=bonus_amount,
+                    transaction_type='daily_login',
+                    description='Daily login bonus'
+                )
+                
+                return Response({
+                    'success': True,
+                    'bonus_amount': float(bonus_amount),
+                    'new_balance': float(profile.wallet_balance)
+                })
+            
             return Response({
-                'error': 'Daily login bonus already claimed today'
+                'error': 'No package assigned to user'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Add daily login bonus
-        if profile.package:
-            bonus_amount = profile.package.daily_login_bonus
-            profile.wallet_balance += bonus_amount
-            profile.total_earnings += bonus_amount
-            profile.last_daily_login = timezone.now()
-            profile.save()
             
-            # Create transaction record
-            Transaction.objects.create(
-                user=request.user,
-                amount=bonus_amount,
-                transaction_type='daily_login',
-                description='Daily login bonus'
+        except Exception as e:
+            print(f"❌ Daily login error: {str(e)}")
+            return Response(
+                {"error": "Failed to process daily login"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-            
-            return Response({
-                'success': True,
-                'bonus_amount': float(bonus_amount),
-                'new_balance': float(profile.wallet_balance)
-            })
-        
-        return Response({
-            'error': 'No package assigned to user'
-        }, status=status.HTTP_400_BAD_REQUEST)
 
 # ViewSets
 class CouponViewSet(viewsets.ModelViewSet):
@@ -235,15 +293,7 @@ class CouponViewSet(viewsets.ModelViewSet):
 class PackageViewSet(viewsets.ModelViewSet):
     queryset = Package.objects.all()
     serializer_class = PackageSerializer
-    permission_classes = [AllowAny]  # Important: Allow anyone to view packages
-    
-    # Add this to handle GET requests properly
-    def list(self, request, *args, **kwargs):
-        print("📦 Packages list requested")  # Debug
-        packages = Package.objects.all()
-        print(f"📦 Found {packages.count()} packages")  # Debug
-        serializer = self.get_serializer(packages, many=True)
-        return Response(serializer.data)
+    permission_classes = [AllowAny]
 
 class UserProfileViewSet(viewsets.ModelViewSet):
     serializer_class = UserProfileSerializer
@@ -306,47 +356,56 @@ class GameViewSet(viewsets.ViewSet):
     def play(self, request):
         game_type = request.data.get('game_type')
         user = request.user
-        profile = UserProfile.objects.get(user=user)
         
-        # Check if user can play game today
-        today = timezone.now().date()
-        if profile.last_daily_game and profile.last_daily_game.date() == today:
+        try:
+            profile = UserProfile.objects.get(user=user)
+            
+            # Check if user can play game today
+            today = timezone.now().date()
+            if profile.last_daily_game and profile.last_daily_game.date() == today:
+                return Response({
+                    'error': 'You have already played a game today'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Calculate reward based on package
+            if profile.package:
+                reward_amount = profile.package.daily_game_bonus
+                
+                # Update user profile
+                profile.wallet_balance += reward_amount
+                profile.total_earnings += reward_amount
+                profile.last_daily_game = timezone.now()
+                profile.save()
+                
+                # Create game participation record
+                game_participation = GameParticipation.objects.create(
+                    user=user,
+                    game_type=game_type,
+                    reward_earned=reward_amount
+                )
+                
+                # Create transaction record
+                Transaction.objects.create(
+                    user=user,
+                    amount=reward_amount,
+                    transaction_type='game',
+                    description=f'{game_type} game reward'
+                )
+                
+                return Response({
+                    'success': True,
+                    'reward': float(reward_amount),
+                    'new_balance': float(profile.wallet_balance),
+                    'game_type': game_type
+                })
+            
             return Response({
-                'error': 'You have already played a game today'
+                'error': 'No package assigned to user'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Calculate reward based on package
-        if profile.package:
-            reward_amount = profile.package.daily_game_bonus
             
-            # Update user profile
-            profile.wallet_balance += reward_amount
-            profile.total_earnings += reward_amount
-            profile.last_daily_game = timezone.now()
-            profile.save()
-            
-            # Create game participation record
-            game_participation = GameParticipation.objects.create(
-                user=user,
-                game_type=game_type,
-                reward_earned=reward_amount
+        except Exception as e:
+            print(f"❌ Game play error: {str(e)}")
+            return Response(
+                {"error": "Failed to process game"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-            
-            # Create transaction record
-            Transaction.objects.create(
-                user=user,
-                amount=reward_amount,
-                transaction_type='game',
-                description=f'{game_type} game reward'
-            )
-            
-            return Response({
-                'success': True,
-                'reward': float(reward_amount),
-                'new_balance': float(profile.wallet_balance),
-                'game_type': game_type
-            })
-        
-        return Response({
-            'error': 'No package assigned to user'
-        }, status=status.HTTP_400_BAD_REQUEST)

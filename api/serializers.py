@@ -76,15 +76,14 @@ class SignupSerializer(serializers.Serializer):
     confirm_password = serializers.CharField(write_only=True)
     coupon_code = serializers.CharField()
     referral_code = serializers.CharField(required=False, allow_blank=True)
-    phone_number = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    phone_number = serializers.CharField(required=True, allow_blank=False, max_length=14)
     
     def validate(self, data):
+        print("🔍 Validating registration data:", data)
+        
         # Password validation
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError("Passwords do not match")
-        
-        if len(data['password']) < 6:
-            raise serializers.ValidationError("Password must be at least 6 characters long")
         
         # Username validation
         if User.objects.filter(username=data['username']).exists():
@@ -97,7 +96,8 @@ class SignupSerializer(serializers.Serializer):
         # Coupon validation
         try:
             coupon = Coupon.objects.get(coupon_code=data['coupon_code'], is_used=False)
-            data['coupon'] = coupon  # Store coupon instance for use in create method
+            data['coupon'] = coupon
+            print(f"✅ Coupon validated: {coupon.coupon_code}")
         except Coupon.DoesNotExist:
             raise serializers.ValidationError("Invalid or used coupon code")
         
@@ -106,11 +106,12 @@ class SignupSerializer(serializers.Serializer):
             try:
                 referrer_profile = UserProfile.objects.get(referral_code=data['referral_code'])
                 data['referrer'] = referrer_profile.user
+                print(f"✅ Referral code validated: {data['referral_code']}")
             except UserProfile.DoesNotExist:
                 raise serializers.ValidationError("Invalid referral code")
         
         return data
-
+    
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
