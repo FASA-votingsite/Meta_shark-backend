@@ -44,7 +44,7 @@ class UserProfile(models.Model):
     package = models.ForeignKey(Package, on_delete=models.SET_NULL, null=True)
     referral_code = models.CharField(max_length=20, unique=True, null=True, blank=True)
     referred_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals')
-    phone_number = models.CharField(max_length=20, null=True, blank=True)  # WhatsApp number field
+    phone_number = models.CharField(max_length=20, null=True, blank=False)  # WhatsApp number field
     wallet_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     total_earnings = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     last_daily_login = models.DateTimeField(null=True, blank=True)
@@ -52,10 +52,13 @@ class UserProfile(models.Model):
     
     def save(self, *args, **kwargs):
         if not self.referral_code:
-            self.referral_code = f"REF{secrets.token_hex(3).upper()}"
-            # Ensure uniqueness
-            while UserProfile.objects.filter(referral_code=self.referral_code).exists():
-                self.referral_code = f"REF{secrets.token_hex(3).upper()}"
+            # Generate a unique referral code
+            import secrets
+            while True:
+                code = f"META{secrets.token_hex(3).upper()}"
+                if not UserProfile.objects.filter(referral_code=code).exists():
+                    self.referral_code = code
+                    break
         super().save(*args, **kwargs)
     
     def __str__(self):

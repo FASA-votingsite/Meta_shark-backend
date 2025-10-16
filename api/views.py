@@ -38,17 +38,27 @@ class AuthView(APIView):
                 )
                 print(f"✅ Profile created for: {user.username}")
                 
-                # Mark coupon as used
+                # Mark coupon as used and assign package
                 coupon = serializer.validated_data['coupon']
                 coupon.is_used = True
                 coupon.used_by = user
                 coupon.save()
                 print(f"✅ Coupon marked as used: {coupon.coupon_code}")
                 
-                # Assign package to user
+                # Assign package to user profile
                 profile.package = coupon.package
                 profile.save()
-                print(f"✅ Package assigned: {coupon.package.name}")
+                print(f"✅ Package assigned: {coupon.package.name} ({coupon.package.package_type})")
+                
+                # Handle referral if provided
+                if serializer.validated_data.get('referrer'):
+                    referrer = serializer.validated_data['referrer']
+                    Referral.objects.create(
+                        referrer=referrer,
+                        referee=user,
+                        reward_earned=referrer.userprofile.package.referral_bonus if referrer.userprofile.package else Decimal('0')
+                    )
+                    print(f"✅ Referral created for: {referrer.username}")
                 
                 # Create token
                 token = Token.objects.create(user=user)
@@ -61,6 +71,7 @@ class AuthView(APIView):
                         'username': user.username,
                         'email': user.email,
                         'package': profile.package.name if profile.package else None,
+                        'package_type': profile.package.package_type if profile.package else None,
                         'wallet_balance': float(profile.wallet_balance),
                         'phone_number': profile.phone_number
                     }
@@ -76,7 +87,7 @@ class AuthView(APIView):
         else:
             print("❌ Serializer errors:", serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+        
 class LoginView(APIView):
     permission_classes = [AllowAny]
     
@@ -85,20 +96,30 @@ class LoginView(APIView):
         password = request.data.get('password')
         
         print(f"🔐 Login attempt for: {username}")
-        print(f"📦 Request data: {request.data}")
         
         if not username or not password:
-            print("❌ Missing username or password")
             return Response(
                 {"error": "Please provide both username and password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if user exists
-        user_exists = User.objects.filter(username=username).exists()
-        print(f"👤 User exists: {user_exists}")
+        user = None
         
+        # Try to find user by username first
         user = authenticate(username=username, password=password)
+        
+        # If not found by username, try to find by WhatsApp number
+        if not user:
+            try:
+                # Look for user profile with matching phone number
+                profile = UserProfile.objects.get(phone_number=username)
+                user = authenticate(username=profile.user.username, password=password)
+                print(f"🔍 Found user by WhatsApp number: {profile.user.username}")
+            except UserProfile.DoesNotExist:
+                print(f"❌ No user found with username or WhatsApp number: {username}")
+            except Exception as e:
+                print(f"❌ Error during WhatsApp login: {str(e)}")
+        
         print(f"🔑 Authentication result: {user}")
         
         if user:
@@ -116,6 +137,7 @@ class LoginView(APIView):
                     'username': user.username,
                     'email': user.email,
                     'package': profile.package.name if profile.package else None,
+                    'package_type': profile.package.package_type if profile.package else None,
                     'wallet_balance': float(profile.wallet_balance),
                     'phone_number': profile.phone_number
                 }
@@ -134,10 +156,9 @@ class LoginView(APIView):
         else:
             print(f"❌ Authentication failed for: {username}")
             return Response(
-                {"error": "Invalid username or password"}, 
+                {"error": "Invalid username, WhatsApp number or password"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 class ValidateCouponView(APIView):
     permission_classes = [AllowAny]
     
