@@ -327,15 +327,38 @@ class UserProfileViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 class ContentSubmissionViewSet(viewsets.ModelViewSet):
-    serializer_class = ContentSubmissionSerializer
     permission_classes = [IsAuthenticated]
-
+    serializer_class = ContentSubmissionSerializer
+    queryset = ContentSubmission.objects.all()
+    
     def get_queryset(self):
         return ContentSubmission.objects.filter(user=self.request.user)
-
+    
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
+        try:
+            # Save the submission with the current user
+            submission = serializer.save(user=self.request.user)
+            
+            # Set initial status and earnings
+            submission.status = 'pending'
+            submission.earnings = 0
+            submission.save()
+            
+            return submission
+        except Exception as e:
+            print(f"Error creating submission: {e}")
+            raise
+    
+    def create(self, request, *args, **kwargs):
+        try:
+            response = super().create(request, *args, **kwargs)
+            return response
+        except Exception as e:
+            return Response(
+                {'error': 'Failed to submit content. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
 class ReferralViewSet(viewsets.ModelViewSet):
     serializer_class = ReferralSerializer
     permission_classes = [IsAuthenticated]
@@ -372,61 +395,71 @@ class GameParticipationViewSet(viewsets.ModelViewSet):
 
 class GameViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
-
+    
     @action(detail=False, methods=['post'])
     def play(self, request):
-        game_type = request.data.get('game_type')
-        user = request.user
-        
-        try:
-            profile = UserProfile.objects.get(user=user)
+        serializer = GamePlaySerializer(data=request.data)
+        if serializer.is_valid():
+            game_type = serializer.validated_data['game_type']
+            user = request.user
+            profile = user.userprofile
             
-            # Check if user can play game today
+            # Check if user already played today
             today = timezone.now().date()
-            if profile.last_daily_game and profile.last_daily_game.date() == today:
+            last_game = GameParticipation.objects.filter(
+                user=user, 
+                game_type=game_type,
+                participation_date__date=today
+            ).first()
+            
+            if last_game:
                 return Response({
-                    'error': 'You have already played a game today'
+                    'error': f'You have already played {game_type} today'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Calculate reward based on package
             if profile.package:
-                reward_amount = profile.package.daily_game_bonus
-                
-                # Update user profile
-                profile.wallet_balance += reward_amount
-                profile.total_earnings += reward_amount
-                profile.last_daily_game = timezone.now()
-                profile.save()
-                
-                # Create game participation record
-                game_participation = GameParticipation.objects.create(
-                    user=user,
-                    game_type=game_type,
-                    reward_earned=reward_amount
-                )
-                
-                # Create transaction record
-                Transaction.objects.create(
-                    user=user,
-                    amount=reward_amount,
-                    transaction_type='game',
-                    description=f'{game_type} game reward'
-                )
-                
-                return Response({
-                    'success': True,
-                    'reward': float(reward_amount),
-                    'new_balance': float(profile.wallet_balance),
-                    'game_type': game_type
-                })
+                base_reward = profile.package.daily_game_bonus
+            else:
+                base_reward = Decimal('100')  # Default reward
+            
+            # Add some randomness
+            reward_variation = random.uniform(0.5, 1.5)
+            reward = round(base_reward * Decimal(reward_variation), 2)
+            
+            # Create game participation
+            game = GameParticipation.objects.create(
+                user=user,
+                game_type=game_type,
+                reward_earned=reward,
+                game_data={'base_reward': float(base_reward), 'multiplier': reward_variation}
+            )
+            
+            # Update user wallet
+            profile.wallet_balance += reward
+            profile.total_earnings += reward
+            profile.last_daily_game = timezone.now()
+            profile.save()
+            
+            # Create transaction
+            Transaction.objects.create(
+                user=user,
+                amount=reward,
+                transaction_type='game',
+                description=f'{game.get_game_type_display()} reward'
+            )
             
             return Response({
-                'error': 'No package assigned to user'
-            }, status=status.HTTP_400_BAD_REQUEST)
-            
-        except Exception as e:
-            print(f"❌ Game play error: {str(e)}")
-            return Response(
-                {"error": "Failed to process game"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                'success': True,
+                'reward': float(reward),
+                'message': f'You won ₦{reward}!',
+                'game_id': game.id
+            })
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        games = GameParticipation.objects.filter(user=request.user).order_by('-participation_date')[:20]
+        serializer = GameParticipationSerializer(games, many=True)
+        return Response(serializer.data)

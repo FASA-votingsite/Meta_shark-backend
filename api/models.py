@@ -41,21 +41,22 @@ class Coupon(models.Model):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    package = models.ForeignKey(Package, on_delete=models.SET_NULL, null=True)
+    package = models.ForeignKey(Package, on_delete=models.SET_NULL, null=True, blank=True)
     referral_code = models.CharField(max_length=20, unique=True, null=True, blank=True)
     referred_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals')
-    phone_number = models.CharField(max_length=20, null=True, blank=False)  # WhatsApp number field
+    phone_number = models.CharField(max_length=20, null=True, blank=True)  # Changed to blank=True
     wallet_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     total_earnings = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    total_submissions = models.IntegerField(default=0)  # Add this field
+    approved_submissions = models.IntegerField(default=0)  # Add this field
     last_daily_login = models.DateTimeField(null=True, blank=True)
     last_daily_game = models.DateTimeField(null=True, blank=True)
     
     def save(self, *args, **kwargs):
         if not self.referral_code:
-            # Generate a unique referral code
-            import secrets
+            # Generate unique referral code: META + 4-digit number
             while True:
-                code = f"META{secrets.token_hex(3).upper()}"
+                code = f"META{random.randint(1000, 9999)}"
                 if not UserProfile.objects.filter(referral_code=code).exists():
                     self.referral_code = code
                     break
@@ -75,6 +76,7 @@ class ContentSubmission(models.Model):
         ('pending', 'Pending Review'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
+        ('paid', 'Paid'),  # Add paid status
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -85,11 +87,22 @@ class ContentSubmission(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     earnings = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     review_notes = models.TextField(blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
     
     def save(self, *args, **kwargs):
-        # Auto-approve and set earnings if approved (for demo)
-        if self.status == 'approved' and self.earnings == 0:
-            # Set different earnings based on platform
+        is_new = self._state.adding
+        
+        # Update user's total submissions count when new submission is created
+        if is_new:
+            profile = self.user.userprofile
+            profile.total_submissions += 1
+            profile.save()
+        
+        # Handle approval
+        if self.status == 'approved' and not self.approved_at:
+            self.approved_at = timezone.now()
+            # Set earnings based on platform
             platform_earnings = {
                 'tiktok': Decimal('500'),
                 'instagram': Decimal('400'),
@@ -97,8 +110,16 @@ class ContentSubmission(models.Model):
             }
             self.earnings = platform_earnings.get(self.platform, Decimal('200'))
             
-            # Update user's wallet
-            if not self._state.adding:  # Only if updating existing instance
+            # Update user's approved submissions count
+            profile = self.user.userprofile
+            profile.approved_submissions += 1
+            profile.save()
+        
+        # Handle payment
+        if self.status == 'paid' and not self.paid_at:
+            self.paid_at = timezone.now()
+            # Add earnings to wallet
+            if self.earnings > 0:
                 profile = self.user.userprofile
                 profile.wallet_balance += self.earnings
                 profile.total_earnings += self.earnings
@@ -109,14 +130,14 @@ class ContentSubmission(models.Model):
                     user=self.user,
                     amount=self.earnings,
                     transaction_type='content',
-                    description=f'{self.get_platform_display()} video approved'
+                    description=f'{self.get_platform_display()} video payment'
                 )
         
         super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.user.username} - {self.platform}"
-
+    
 class Referral(models.Model):
     referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_made')
     referee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_received')
