@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 import secrets
+import random  # Add this import
 from decimal import Decimal
 
 # Create your models here.
@@ -28,7 +29,7 @@ class Package(models.Model):
         return f"{self.name} - ₦{self.price}"
 
 class Coupon(models.Model):
-    coupon_code = models.CharField(max_length=22, unique=True)  # Increased for metapro/sil + 15 digits
+    coupon_code = models.CharField(max_length=22, unique=True)
     package = models.ForeignKey(Package, on_delete=models.CASCADE)
     is_used = models.BooleanField(default=False)
     used_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -44,11 +45,12 @@ class UserProfile(models.Model):
     package = models.ForeignKey(Package, on_delete=models.SET_NULL, null=True, blank=True)
     referral_code = models.CharField(max_length=20, unique=True, null=True, blank=True)
     referred_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals')
-    phone_number = models.CharField(max_length=20, null=True, blank=True)  # Changed to blank=True
+    phone_number = models.CharField(max_length=20, null=True, blank=True)
+    whatsapp_number = models.CharField(max_length=20, null=True, blank=True)
     wallet_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     total_earnings = models.DecimalField(max_digits=15, decimal_places=2, default=0)
-    total_submissions = models.IntegerField(default=0)  # Add this field
-    approved_submissions = models.IntegerField(default=0)  # Add this field
+    total_submissions = models.IntegerField(default=0)
+    approved_submissions = models.IntegerField(default=0)
     last_daily_login = models.DateTimeField(null=True, blank=True)
     last_daily_game = models.DateTimeField(null=True, blank=True)
     
@@ -76,7 +78,7 @@ class ContentSubmission(models.Model):
         ('pending', 'Pending Review'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
-        ('paid', 'Paid'),  # Add paid status
+        ('paid', 'Paid'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -137,7 +139,7 @@ class ContentSubmission(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.platform}"
-    
+
 class Referral(models.Model):
     referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_made')
     referee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_received')

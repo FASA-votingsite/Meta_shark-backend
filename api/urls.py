@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/auth/login/', views.LoginView.as_view(), name='login'),
     path('api/auth/validate-coupon/', views.ValidateCouponView.as_view(), name='validate-coupon'),
     path('api/auth/verify-token/', views.verify_token, name='verify-token'),
+    path('api/auth/token/refresh/', views.TokenRefreshView.as_view(), name='token_refresh'),
     
     # Other API endpoints
     path('api/dashboard/', views.DashboardView.as_view(), name='dashboard'),

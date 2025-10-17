@@ -1,14 +1,25 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
+from decimal import Decimal
+import random
 from .models import *
 from .serializers import *
+
+# JWT Token generation helper
+def get_tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    }
 
 # Authentication Views
 class AuthView(APIView):
@@ -19,146 +30,194 @@ class AuthView(APIView):
         
         serializer = SignupSerializer(data=request.data)
         
-        if serializer.is_valid():
-            print("✅ Serializer is valid")
-            
-            try:
-                # Create user
-                user = User.objects.create_user(
-                    username=serializer.validated_data['username'],
-                    email=serializer.validated_data['email'],
-                    password=serializer.validated_data['password']
-                )
-                print(f"✅ User created: {user.username}")
-                
-                # Create user profile
-                profile = UserProfile.objects.create(
-                    user=user,
-                    phone_number=serializer.validated_data.get('phone_number', '')
-                )
-                print(f"✅ Profile created for: {user.username}")
-                
-                # Mark coupon as used and assign package
-                coupon = serializer.validated_data['coupon']
-                coupon.is_used = True
-                coupon.used_by = user
-                coupon.save()
-                print(f"✅ Coupon marked as used: {coupon.coupon_code}")
-                
-                # Assign package to user profile
-                profile.package = coupon.package
-                profile.save()
-                print(f"✅ Package assigned: {coupon.package.name} ({coupon.package.package_type})")
-                
-                # Handle referral if provided
-                if serializer.validated_data.get('referrer'):
-                    referrer = serializer.validated_data['referrer']
-                    Referral.objects.create(
-                        referrer=referrer,
-                        referee=user,
-                        reward_earned=referrer.userprofile.package.referral_bonus if referrer.userprofile.package else Decimal('0')
-                    )
-                    print(f"✅ Referral created for: {referrer.username}")
-                
-                # Create token
-                token = Token.objects.create(user=user)
-                print(f"✅ Token created: {token.key}")
-                
-                return Response({
-                    'token': token.key,
-                    'user': {
-                        'id': user.id,
-                        'username': user.username,
-                        'email': user.email,
-                        'package': profile.package.name if profile.package else None,
-                        'package_type': profile.package.package_type if profile.package else None,
-                        'wallet_balance': float(profile.wallet_balance),
-                        'phone_number': profile.phone_number
-                    }
-                }, status=status.HTTP_201_CREATED)
-                
-            except Exception as e:
-                print(f"❌ Error during registration: {str(e)}")
-                return Response(
-                    {"error": f"Registration failed: {str(e)}"}, 
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        
-        else:
+        if not serializer.is_valid():
             print("❌ Serializer errors:", serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-class LoginView(APIView):
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
+        print("✅ Serializer is valid")
         
-        print(f"🔐 Login attempt for: {username}")
-        
-        if not username or not password:
-            return Response(
-                {"error": "Please provide both username and password"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        user = None
-        
-        # Try to find user by username first
-        user = authenticate(username=username, password=password)
-        
-        # If not found by username, try to find by WhatsApp number
-        if not user:
-            try:
-                # Look for user profile with matching phone number
-                profile = UserProfile.objects.get(phone_number=username)
-                user = authenticate(username=profile.user.username, password=password)
-                print(f"🔍 Found user by WhatsApp number: {profile.user.username}")
-            except UserProfile.DoesNotExist:
-                print(f"❌ No user found with username or WhatsApp number: {username}")
-            except Exception as e:
-                print(f"❌ Error during WhatsApp login: {str(e)}")
-        
-        print(f"🔑 Authentication result: {user}")
-        
-        if user:
-            print(f"✅ Login successful for: {user.username}")
-            
-            try:
-                # Get or create token
-                token, created = Token.objects.get_or_create(user=user)
-                print(f"🎟️ Token: {token.key[:10]}...")
+        try:
+            with transaction.atomic():
+                data = serializer.validated_data
                 
-                # Get user profile
-                profile = UserProfile.objects.get(user=user)
+                # Create user
+                user = User.objects.create_user(
+                    username=data['username'],
+                    email=data['email'],
+                    password=data['password']
+                )
+                print(f"✅ User created: {user.username}")
+                
+                # Get coupon and package
+                coupon = data['coupon']
+                package = coupon.package
+                
+                # Create user profile with package
+                profile = UserProfile.objects.create(
+                    user=user,
+                    package=package,
+                    phone_number=data.get('phone_number', ''),
+                )
+                print(f"✅ Profile created for: {user.username} with package: {package.name}")
+                
+                # Mark coupon as used
+                coupon.is_used = True
+                coupon.used_by = user
+                coupon.used_at = timezone.now()
+                coupon.save()
+                print(f"✅ Coupon marked as used: {coupon.coupon_code}")
+                
+                # Handle referral if provided
+                if data.get('referrer'):
+                    referrer = data['referrer']
+                    referral_bonus = referrer.userprofile.package.referral_bonus if referrer.userprofile.package else Decimal('4000')
+                    
+                    # Create referral record
+                    referral = Referral.objects.create(
+                        referrer=referrer,
+                        referee=user,
+                        reward_earned=referral_bonus
+                    )
+                    
+                    # Add referral bonus to referrer's wallet
+                    referrer_profile = referrer.userprofile
+                    referrer_profile.wallet_balance += referral_bonus
+                    referrer_profile.total_earnings += referral_bonus
+                    referrer_profile.save()
+                    
+                    # Create transaction for referrer
+                    Transaction.objects.create(
+                        user=referrer,
+                        amount=referral_bonus,
+                        transaction_type='referral',
+                        description=f'Referral bonus for {user.username}'
+                    )
+                    
+                    print(f"✅ Referral created for: {referrer.username} with bonus: ₦{referral_bonus}")
+                
+                # Generate JWT tokens
+                tokens = get_tokens_for_user(user)
+                print(f"✅ JWT tokens generated for: {user.username}")
+                
+                # Prepare user data for response
                 user_data = {
                     'id': user.id,
                     'username': user.username,
                     'email': user.email,
-                    'package': profile.package.name if profile.package else None,
-                    'package_type': profile.package.package_type if profile.package else None,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'phone_number': profile.phone_number,
                     'wallet_balance': float(profile.wallet_balance),
-                    'phone_number': profile.phone_number
+                    'total_earnings': float(profile.total_earnings),
+                    'referral_code': profile.referral_code,
+                    'package': {
+                        'id': package.id,
+                        'name': package.name,
+                        'type': package.package_type,
+                        'price': float(package.price),
+                    } if package else None
                 }
                 
                 return Response({
-                    'token': token.key,
+                    'token': tokens['access'],
+                    'refresh': tokens['refresh'],
                     'user': user_data
-                })
+                }, status=status.HTTP_201_CREATED)
                 
-            except Exception as e:
-                print(f"❌ Error in login process: {str(e)}")
-                return Response(
-                    {"error": "Login processing error"}, 
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        else:
-            print(f"❌ Authentication failed for: {username}")
+        except Exception as e:
+            print(f"❌ Error during registration: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return Response(
-                {"error": "Invalid username, WhatsApp number or password"}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": f"Registration failed: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+# Login View with JWT
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        print("🔐 Login request received:", request.data)
+        
+        serializer = LoginSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        username = serializer.validated_data['username']
+        password = serializer.validated_data['password']
+        phone_number = serializer.validated_data.get('phone_number', '')
+        
+        # Authenticate user
+        user = authenticate(username=username, password=password)
+        
+        if user is not None:
+            # Update phone number if provided
+            if phone_number:
+                try:
+                    profile = user.userprofile
+                    profile.phone_number = phone_number
+                    profile.save()
+                except UserProfile.DoesNotExist:
+                    UserProfile.objects.create(user=user, phone_number=phone_number)
+            
+            # Get or create user profile
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            
+            # Generate JWT tokens
+            tokens = get_tokens_for_user(user)
+            
+            # Prepare user data
+            user_data = {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'phone_number': profile.phone_number,
+                'wallet_balance': float(profile.wallet_balance),
+                'total_earnings': float(profile.total_earnings),
+                'referral_code': profile.referral_code,
+                'package': {
+                    'id': profile.package.id if profile.package else None,
+                    'name': profile.package.name if profile.package else None,
+                    'type': profile.package.package_type if profile.package else None,
+                    'price': float(profile.package.price) if profile.package else 0,
+                } if profile.package else None
+            }
+            
+            print(f"✅ Login successful for: {user.username}")
+            return Response({
+                'token': tokens['access'],
+                'refresh': tokens['refresh'],
+                'user': user_data
+            })
+        else:
+            print("❌ Login failed: Invalid credentials")
+            return Response({
+                'error': 'Invalid username or password'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+# Token Refresh View
+class TokenRefreshView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+        
+        if not refresh_token:
+            return Response({'error': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            refresh = RefreshToken(refresh_token)
+            data = {
+                'access': str(refresh.access_token),
+            }
+            return Response(data)
+        except Exception as e:
+            return Response({'error': 'Invalid refresh token'}, status=status.HTTP_401_UNAUTHORIZED)
+        
 class ValidateCouponView(APIView):
     permission_classes = [AllowAny]
     
