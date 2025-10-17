@@ -35,7 +35,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'your_app/static/'),
+    os.path.join(BASE_DIR, 'static')
 ]
 
 SECRET_KEY = 'your-secret-key-here'
@@ -71,7 +71,6 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
     'api',
-    "your_app", 
 ]
 
 MIDDLEWARE = [

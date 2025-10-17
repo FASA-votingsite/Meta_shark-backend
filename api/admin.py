@@ -49,11 +49,12 @@ class CouponAdmin(admin.ModelAdmin):
     
     def copy_button(self, obj):
         return format_html(
-            '<button type="button" onclick="copyCouponCode(\'{}\')" '
+            '<button type="button" class="copy-coupon-btn" data-coupon="{}" '
             'style="padding: 6px 12px; background: #417690; color: white; '
             'border: none; border-radius: 4px; cursor: pointer; font-size: 12px; '
-            'margin: 2px;">Copy Code</button>',
-            obj.coupon_code
+            'margin: 2px;">📋 Copy</button>'
+            '<span id="copy-status-{}" style="margin-left: 8px; font-size: 11px; color: green;"></span>',
+            obj.coupon_code, obj.coupon_code
         )
     copy_button.short_description = 'Actions'
     
@@ -132,23 +133,23 @@ class CouponAdmin(admin.ModelAdmin):
     
     def _create_coupon(self, package):
         prefix_map = {
-            'pro': 'metapro',
-            'silver': 'metasil'
+            'pro': 'METAPRO',
+            'silver': 'METASIL'
         }
-        prefix = prefix_map.get(package.package_type, 'meta')
+        prefix = prefix_map.get(package.package_type, 'META')
         
         # Generate unique coupon code
         attempts = 0
         while attempts < 10:
-            random_digits = ''.join(random.choices(string.digits, k=15))
+            random_digits = ''.join(random.choices(string.digits, k=6))
             coupon_code = f"{prefix}{random_digits}"
             if not Coupon.objects.filter(coupon_code=coupon_code).exists():
                 break
             attempts += 1
         else:
             import time
-            timestamp = str(int(time.time()))[-10:].zfill(10)
-            coupon_code = f"{prefix}{timestamp}{''.join(random.choices(string.digits, k=5))}"
+            timestamp = str(int(time.time()))[-6:].zfill(6)
+            coupon_code = f"{prefix}{timestamp}"
         
         return Coupon.objects.create(
             coupon_code=coupon_code,
@@ -216,7 +217,8 @@ class ContentSubmissionAdmin(admin.ModelAdmin):
         status_colors = {
             'pending': '#ffc107',
             'approved': '#28a745', 
-            'rejected': '#dc3545'
+            'rejected': '#dc3545',
+            'paid': '#17a2b8'
         }
         color = status_colors.get(obj.status, '#6c757d')
         return format_html(
