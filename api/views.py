@@ -281,6 +281,40 @@ class DashboardView(APIView):
             profile = UserProfile.objects.get(user=request.user)
             submissions = ContentSubmission.objects.filter(user=request.user)
             referrals = Referral.objects.filter(referrer=request.user)
+            transactions = Transaction.objects.filter(user=request.user)
+            
+            # Calculate platform-specific earnings from APPROVED/PAID submissions
+            platform_earnings = {
+                'tiktok': Decimal('0'),
+                'instagram': Decimal('0'),
+                'facebook': Decimal('0')
+            }
+            
+            # Get all approved/paid submissions and calculate platform earnings
+            approved_submissions = submissions.filter(status__in=['approved', 'paid'])
+            for submission in approved_submissions:
+                platform = submission.platform.lower()
+                if platform in platform_earnings:
+                    platform_earnings[platform] += submission.earnings
+            
+            # Calculate earnings breakdown from transactions
+            earnings_breakdown = {
+                'content': Decimal('0'),
+                'referrals': Decimal('0'),
+                'games': Decimal('0'),
+                'daily_login': Decimal('0')
+            }
+            
+            # Sum earnings by transaction type (only positive amounts)
+            for transaction in transactions.filter(amount__gt=0):
+                if transaction.transaction_type in earnings_breakdown:
+                    earnings_breakdown[transaction.transaction_type] += transaction.amount
+            
+            # Calculate total content earnings (sum of all platforms)
+            total_content_earnings = sum(platform_earnings.values())
+            
+            # Get recent submissions (last 10)
+            recent_submissions = submissions.order_by('-submission_date')[:10]
             
             data = {
                 'wallet_balance': float(profile.wallet_balance),
@@ -289,22 +323,50 @@ class DashboardView(APIView):
                 'submission_count': submissions.count(),
                 'referral_count': referrals.count(),
                 'recent_transactions': TransactionSerializer(
-                    Transaction.objects.filter(user=request.user).order_by('-date')[:5],
+                    transactions.order_by('-date')[:5],
                     many=True
+                ).data,
+                'recent_submissions': ContentSubmissionSerializer(
+                    recent_submissions, many=True
                 ).data,
                 'referral_stats': {
                     'total_referrals': referrals.count(),
                     'total_earned': float(sum([r.reward_earned for r in referrals]))
+                },
+                'earnings_breakdown': {
+                    'content': float(total_content_earnings),
+                    'referrals': float(earnings_breakdown['referrals']),
+                    'games': float(earnings_breakdown['games']),
+                    'daily_login': float(earnings_breakdown['daily_login'])
+                },
+                'platform_stats': {
+                    'tiktok': {
+                        'earnings': float(platform_earnings['tiktok']),
+                        'submissions': submissions.filter(platform='tiktok').count(),
+                        'approved': submissions.filter(platform='tiktok', status__in=['approved', 'paid']).count()
+                    },
+                    'instagram': {
+                        'earnings': float(platform_earnings['instagram']),
+                        'submissions': submissions.filter(platform='instagram').count(),
+                        'approved': submissions.filter(platform='instagram', status__in=['approved', 'paid']).count()
+                    },
+                    'facebook': {
+                        'earnings': float(platform_earnings['facebook']),
+                        'submissions': submissions.filter(platform='facebook').count(),
+                        'approved': submissions.filter(platform='facebook', status__in=['approved', 'paid']).count()
+                    }
                 }
             }
             return Response(data)
         except Exception as e:
             print(f"❌ Dashboard error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return Response(
                 {"error": "Failed to load dashboard data"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
+        
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -472,7 +534,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
-        
+
 class TransactionViewSet(viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
