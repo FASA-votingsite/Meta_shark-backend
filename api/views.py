@@ -12,6 +12,9 @@ from decimal import Decimal
 import random
 from .models import *
 from .serializers import *
+from django.db.models import Sum
+from datetime import timedelta
+
 
 # JWT Token generation helper
 def get_tokens_for_user(user):
@@ -306,48 +309,50 @@ class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
-        try:
-            profile = UserProfile.objects.get(user=request.user)
-            
-            # Check if user already claimed daily login today
-            today = timezone.now().date()
-            if profile.last_daily_login and profile.last_daily_login.date() == today:
-                return Response({
-                    'error': 'Daily login bonus already claimed today'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Add daily login bonus
-            if profile.package:
-                bonus_amount = profile.package.daily_login_bonus
-                profile.wallet_balance += bonus_amount
-                profile.total_earnings += bonus_amount
-                profile.last_daily_login = timezone.now()
-                profile.save()
-                
-                # Create transaction record
-                Transaction.objects.create(
-                    user=request.user,
-                    amount=bonus_amount,
-                    transaction_type='daily_login',
-                    description='Daily login bonus'
-                )
-                
-                return Response({
-                    'success': True,
-                    'bonus_amount': float(bonus_amount),
-                    'new_balance': float(profile.wallet_balance)
-                })
-            
+        user = request.user
+        profile = user.userprofile
+        
+        # Check if user already claimed today
+        today = timezone.now().date()
+        if profile.last_daily_login and profile.last_daily_login.date() == today:
             return Response({
-                'error': 'No package assigned to user'
+                'error': 'Daily login bonus already claimed today'
             }, status=status.HTTP_400_BAD_REQUEST)
-            
-        except Exception as e:
-            print(f"❌ Daily login error: {str(e)}")
-            return Response(
-                {"error": "Failed to process daily login"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        
+        # Calculate bonus based on package
+        if profile.package:
+            bonus = profile.package.daily_login_bonus
+        else:
+            bonus = Decimal('500')  # Default bonus for no package
+        
+        # Add bonus to wallet
+        profile.wallet_balance += bonus
+        profile.total_earnings += bonus
+        profile.last_daily_login = timezone.now()
+        profile.save()
+        
+        # Create transaction
+        transaction = Transaction.objects.create(
+            user=user,
+            amount=bonus,
+            transaction_type='daily_login',
+            description=f'Daily login bonus - {profile.package.name if profile.package else "Basic"}'
+        )
+        
+        # Create game participation record
+        game = GameParticipation.objects.create(
+            user=user,
+            game_type='daily_login',
+            reward_earned=bonus,
+            game_data={'type': 'daily_login', 'bonus_amount': float(bonus)}
+        )
+        
+        return Response({
+            'success': True,
+            'bonus_amount': float(bonus),
+            'message': f'₦{bonus} daily login bonus added to your wallet!',
+            'game_id': game.id
+        })
 
 # ViewSets
 class CouponViewSet(viewsets.ModelViewSet):
@@ -418,23 +423,56 @@ class ContentSubmissionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-class ReferralViewSet(viewsets.ModelViewSet):
-    serializer_class = ReferralSerializer
+class ReferralViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
-
+    serializer_class = ReferralSerializer
+    
     def get_queryset(self):
         return Referral.objects.filter(referrer=self.request.user)
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        user = request.user
+        referrals = Referral.objects.filter(referrer=user)
+        
+        total_referrals = referrals.count()
+        total_earned = referrals.aggregate(total=Sum('reward_earned'))['total'] or 0
+        pending_earnings = referrals.filter(is_paid=False).aggregate(total=Sum('reward_earned'))['total'] or 0
+        
+        return Response({
+            'total_referrals': total_referrals,
+            'total_earned': float(total_earned),
+            'pending_earnings': float(pending_earnings)
+        })
+    
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        profile = request.user.userprofile
+        serializer = UserProfileSerializer(profile)
+        return Response(serializer.data)
+
+class WalletView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        profile = request.user.userprofile
+        return Response({
+            'balance': float(profile.wallet_balance),
+            'total_earnings': float(profile.total_earnings)
+        })
 
 class WithdrawalViewSet(viewsets.ModelViewSet):
-    serializer_class = WithdrawalRequestSerializer
     permission_classes = [IsAuthenticated]
-
+    serializer_class = WithdrawalRequestSerializer
+    
     def get_queryset(self):
         return WithdrawalRequest.objects.filter(user=self.request.user)
-
+    
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
-
+        
 class TransactionViewSet(viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
@@ -457,68 +495,90 @@ class GameViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'])
     def play(self, request):
-        serializer = GamePlaySerializer(data=request.data)
-        if serializer.is_valid():
-            game_type = serializer.validated_data['game_type']
-            user = request.user
-            profile = user.userprofile
-            
-            # Check if user already played today
-            today = timezone.now().date()
-            last_game = GameParticipation.objects.filter(
-                user=user, 
-                game_type=game_type,
-                participation_date__date=today
-            ).first()
-            
-            if last_game:
-                return Response({
-                    'error': f'You have already played {game_type} today'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Calculate reward based on package
-            if profile.package:
-                base_reward = profile.package.daily_game_bonus
-            else:
-                base_reward = Decimal('100')  # Default reward
-            
-            # Add some randomness
-            reward_variation = random.uniform(0.5, 1.5)
-            reward = round(base_reward * Decimal(reward_variation), 2)
-            
-            # Create game participation
-            game = GameParticipation.objects.create(
-                user=user,
-                game_type=game_type,
-                reward_earned=reward,
-                game_data={'base_reward': float(base_reward), 'multiplier': reward_variation}
-            )
-            
-            # Update user wallet
-            profile.wallet_balance += reward
-            profile.total_earnings += reward
-            profile.last_daily_game = timezone.now()
-            profile.save()
-            
-            # Create transaction
-            Transaction.objects.create(
-                user=user,
-                amount=reward,
-                transaction_type='game',
-                description=f'{game.get_game_type_display()} reward'
-            )
-            
-            return Response({
-                'success': True,
-                'reward': float(reward),
-                'message': f'You won ₦{reward}!',
-                'game_id': game.id
-            })
+        game_type = request.data.get('game_type')
+        user = request.user
+        profile = user.userprofile
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        if not game_type:
+            return Response({'error': 'Game type is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user already played this game today
+        today = timezone.now().date()
+        last_game = GameParticipation.objects.filter(
+            user=user, 
+            game_type=game_type,
+            participation_date__date=today
+        ).first()
+        
+        if last_game:
+            return Response({
+                'error': f'You have already played {self.get_game_name(game_type)} today'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Calculate reward based on game type and package
+        base_rewards = {
+            'daily_spin': Decimal('500'),
+            'scratch_card': Decimal('300'),
+            'quiz': Decimal('200')
+        }
+        
+        base_reward = base_rewards.get(game_type, Decimal('100'))
+        
+        # Apply package multiplier
+        if profile.package:
+            if profile.package.package_type == 'pro':
+                base_reward *= Decimal('1.5')  # 50% more for pro
+            elif profile.package.package_type == 'silver':
+                base_reward *= Decimal('1.2')  # 20% more for silver
+        
+        # Add some randomness
+        reward_variation = random.uniform(0.8, 1.5)
+        reward = round(base_reward * Decimal(reward_variation), 2)
+        
+        # Create game participation
+        game = GameParticipation.objects.create(
+            user=user,
+            game_type=game_type,
+            reward_earned=reward,
+            game_data={
+                'base_reward': float(base_reward), 
+                'multiplier': reward_variation,
+                'game_type': game_type
+            }
+        )
+        
+        # Update user wallet
+        profile.wallet_balance += reward
+        profile.total_earnings += reward
+        profile.last_daily_game = timezone.now()
+        profile.save()
+        
+        # Create transaction
+        Transaction.objects.create(
+            user=user,
+            amount=reward,
+            transaction_type='game',
+            description=f'{self.get_game_name(game_type)} reward'
+        )
+        
+        return Response({
+            'success': True,
+            'reward': float(reward),
+            'message': f'You won ₦{reward} from {self.get_game_name(game_type)}!',
+            'game_id': game.id
+        })
     
     @action(detail=False, methods=['get'])
     def history(self, request):
         games = GameParticipation.objects.filter(user=request.user).order_by('-participation_date')[:20]
         serializer = GameParticipationSerializer(games, many=True)
         return Response(serializer.data)
+    
+    def get_game_name(self, game_type):
+        names = {
+            'daily_spin': 'Daily Spin',
+            'scratch_card': 'Scratch Card',
+            'quiz': 'Daily Quiz',
+            'daily_login': 'Daily Login'
+        }
+        return names.get(game_type, game_type)

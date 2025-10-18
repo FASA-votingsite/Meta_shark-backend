@@ -11,6 +11,8 @@ router.register(r'referrals', views.ReferralViewSet, basename='referral')
 router.register(r'withdrawals', views.WithdrawalViewSet, basename='withdrawal')
 router.register(r'transactions', views.TransactionViewSet, basename='transaction')
 router.register(r'games', views.GameParticipationViewSet, basename='gameparticipation')
+router.register(r'games', views.GameViewSet, basename='game')
+
 
 urlpatterns = [
     # Authentication endpoints
@@ -23,6 +25,7 @@ urlpatterns = [
     # Other API endpoints
     path('api/dashboard/', views.DashboardView.as_view(), name='dashboard'),
     path('api/daily-login/', views.DailyLoginView.as_view(), name='daily-login'),
-    path('api/games/play/', views.GameViewSet.as_view({'post': 'play'}), name='game-play'),
+    path('api/profile/', views.ProfileView.as_view(), name='profile'),
+    path('api/wallet/balance/', views.WalletView.as_view(), name='wallet-balance'),
     path('api/', include(router.urls)),
 ]
