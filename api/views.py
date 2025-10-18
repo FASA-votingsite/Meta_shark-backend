@@ -278,26 +278,31 @@ class DashboardView(APIView):
     
     def get(self, request):
         try:
-            profile = UserProfile.objects.get(user=request.user)
+            profile = request.user.userprofile
             submissions = ContentSubmission.objects.filter(user=request.user)
             referrals = Referral.objects.filter(referrer=request.user)
             transactions = Transaction.objects.filter(user=request.user)
             
-            # Calculate platform-specific earnings from APPROVED/PAID submissions
+            # Import serializers here to avoid circular imports
+            from .serializers import (
+                PackageSerializer, TransactionSerializer, 
+                ContentSubmissionSerializer, UserProfileSerializer
+            )
+            
+            # Calculate platform-specific earnings
             platform_earnings = {
                 'tiktok': Decimal('0'),
                 'instagram': Decimal('0'),
                 'facebook': Decimal('0')
             }
             
-            # Get all approved/paid submissions and calculate platform earnings
             approved_submissions = submissions.filter(status__in=['approved', 'paid'])
             for submission in approved_submissions:
                 platform = submission.platform.lower()
                 if platform in platform_earnings:
                     platform_earnings[platform] += submission.earnings
             
-            # Calculate earnings breakdown from transactions
+            # Calculate earnings breakdown
             earnings_breakdown = {
                 'content': Decimal('0'),
                 'referrals': Decimal('0'),
@@ -305,15 +310,11 @@ class DashboardView(APIView):
                 'daily_login': Decimal('0')
             }
             
-            # Sum earnings by transaction type (only positive amounts)
             for transaction in transactions.filter(amount__gt=0):
                 if transaction.transaction_type in earnings_breakdown:
                     earnings_breakdown[transaction.transaction_type] += transaction.amount
             
-            # Calculate total content earnings (sum of all platforms)
             total_content_earnings = sum(platform_earnings.values())
-            
-            # Get recent submissions (last 10)
             recent_submissions = submissions.order_by('-submission_date')[:10]
             
             data = {
@@ -363,9 +364,10 @@ class DashboardView(APIView):
             import traceback
             traceback.print_exc()
             return Response(
-                {"error": "Failed to load dashboard data"}, 
+                {"error": f"Failed to load dashboard data: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            )        
+
         
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
@@ -511,9 +513,25 @@ class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        profile = request.user.userprofile
-        serializer = UserProfileSerializer(profile)
-        return Response(serializer.data)
+        try:
+            profile = request.user.userprofile
+            # Make sure the serializer includes all required fields
+            from .serializers import UserProfileSerializer
+            serializer = UserProfileSerializer(profile)
+            return Response(serializer.data)
+        except UserProfile.DoesNotExist:
+            # Create profile if it doesn't exist
+            profile = UserProfile.objects.create(user=request.user)
+            serializer = UserProfileSerializer(profile)
+            return Response(serializer.data)
+        except Exception as e:
+            print(f"❌ Profile fetch error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": f"Failed to fetch profile: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class WalletView(APIView):
     permission_classes = [IsAuthenticated]
@@ -669,11 +687,17 @@ class GameHistoryView(APIView):
         try:
             # Get game participation history for the user
             games = GameParticipation.objects.filter(user=request.user).order_by('-participation_date')[:20]
+            from .serializers import GameParticipationSerializer
             serializer = GameParticipationSerializer(games, many=True)
             return Response(serializer.data)
         except Exception as e:
             print(f"❌ Game history error: {str(e)}")
-            return Response({"error": "Failed to fetch game history"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": f"Failed to fetch game history: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # Enhanced DailyLoginView with streak tracking
 class DailyLoginView(APIView):

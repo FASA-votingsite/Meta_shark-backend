@@ -6,7 +6,8 @@ from .models import *
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', "phone_number")
+        fields = ('id', 'username', 'email', 'first_name', 'last_name')
+        # REMOVED "phone_number" from here since User model doesn't have it
 
 class PackageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -27,7 +28,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = [
-            'id', 'package', 'referral_code', 'referred_by', 'phone_number',
+            'id', 'user', 'package', 'referral_code', 'referred_by', 'phone_number',
             'whatsapp_number', 'wallet_balance', 'total_earnings', 
             'total_submissions', 'approved_submissions', 'last_daily_login',
             'last_daily_game', 'login_streak'  
@@ -36,11 +37,17 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class ContentSubmissionSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    platform_display = serializers.CharField(source='get_platform_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
     
     class Meta:
         model = ContentSubmission
-        fields = '__all__'
-        read_only_fields = ('user', 'submission_date', 'earnings')
+        fields = [
+            'id', 'user', 'platform', 'platform_display', 'video_url', 'description',
+            'submission_date', 'status', 'status_display', 'earnings',
+            'review_notes', 'approved_at', 'paid_at'
+        ]
+        read_only_fields = ['user', 'submission_date', 'status', 'earnings', 'approved_at', 'paid_at']
 
 class ReferralSerializer(serializers.ModelSerializer):
     referrer = UserSerializer(read_only=True)
@@ -141,19 +148,6 @@ class CouponValidationSerializer(serializers.Serializer):
             return value
         except Coupon.DoesNotExist:
             raise serializers.ValidationError("Invalid or used coupon code")
-
-class ContentSubmissionSerializer(serializers.ModelSerializer):
-    platform_display = serializers.CharField(source='get_platform_display', read_only=True)
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
-    
-    class Meta:
-        model = ContentSubmission
-        fields = [
-            'id', 'platform', 'platform_display', 'video_url', 'description',
-            'submission_date', 'status', 'status_display', 'earnings',
-            'review_notes', 'approved_at', 'paid_at'
-        ]
-        read_only_fields = ['user', 'submission_date', 'status', 'earnings', 'approved_at', 'paid_at']
 
 class WithdrawalRequestCreateSerializer(serializers.ModelSerializer):
     class Meta:
