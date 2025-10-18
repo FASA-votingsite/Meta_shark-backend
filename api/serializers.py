@@ -26,7 +26,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = UserProfile
-        fields = '__all__'
+        fields = [
+            'id', 'package', 'referral_code', 'referred_by', 'phone_number',
+            'whatsapp_number', 'wallet_balance', 'total_earnings', 
+            'total_submissions', 'approved_submissions', 'last_daily_login',
+            'last_daily_game', 'login_streak'  
+        ]
+        read_only_fields = ['referral_code', 'wallet_balance', 'total_earnings']
 
 class ContentSubmissionSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -136,16 +142,18 @@ class CouponValidationSerializer(serializers.Serializer):
         except Coupon.DoesNotExist:
             raise serializers.ValidationError("Invalid or used coupon code")
 
-class ContentSubmissionCreateSerializer(serializers.ModelSerializer):
+class ContentSubmissionSerializer(serializers.ModelSerializer):
+    platform_display = serializers.CharField(source='get_platform_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
     class Meta:
         model = ContentSubmission
-        fields = ('platform', 'video_url', 'description')
-    
-    def validate_video_url(self, value):
-        """Basic URL validation for video platforms"""
-        if not value.startswith(('http://', 'https://')):
-            raise serializers.ValidationError("Please provide a valid URL")
-        return value
+        fields = [
+            'id', 'platform', 'platform_display', 'video_url', 'description',
+            'submission_date', 'status', 'status_display', 'earnings',
+            'review_notes', 'approved_at', 'paid_at'
+        ]
+        read_only_fields = ['user', 'submission_date', 'status', 'earnings', 'approved_at', 'paid_at']
 
 class WithdrawalRequestCreateSerializer(serializers.ModelSerializer):
     class Meta:

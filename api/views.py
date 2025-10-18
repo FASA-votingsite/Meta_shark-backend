@@ -644,3 +644,119 @@ class GameViewSet(viewsets.ViewSet):
             'daily_login': 'Daily Login'
         }
         return names.get(game_type, game_type)
+    
+
+# Add this after the existing views
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            profile = request.user.userprofile
+            serializer = UserProfileSerializer(profile)
+            return Response(serializer.data)
+        except UserProfile.DoesNotExist:
+            return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            print(f"❌ Profile fetch error: {str(e)}")
+            return Response({"error": "Failed to fetch profile"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class GameHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            # Get game participation history for the user
+            games = GameParticipation.objects.filter(user=request.user).order_by('-participation_date')[:20]
+            serializer = GameParticipationSerializer(games, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            print(f"❌ Game history error: {str(e)}")
+            return Response({"error": "Failed to fetch game history"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Enhanced DailyLoginView with streak tracking
+class DailyLoginView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        user = request.user
+        profile = user.userprofile
+        
+        # Check if user already claimed today
+        today = timezone.now().date()
+        if profile.last_daily_login and profile.last_daily_login.date() == today:
+            return Response({
+                'error': 'Daily login bonus already claimed today'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Calculate bonus based on package
+        if profile.package:
+            bonus = profile.package.daily_login_bonus
+        else:
+            bonus = Decimal('500')  # Default bonus for no package
+        
+        # Calculate streak
+        yesterday = today - timedelta(days=1)
+        streak_broken = True
+        
+        if profile.last_daily_login:
+            last_login_date = profile.last_daily_login.date()
+            if last_login_date == yesterday:
+                # Consecutive login - increment streak
+                current_streak = getattr(profile, 'login_streak', 0) + 1
+                streak_broken = False
+            elif last_login_date == today:
+                # Already claimed today
+                return Response({
+                    'error': 'Daily login bonus already claimed today'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                # Streak broken
+                current_streak = 1
+        else:
+            # First time login
+            current_streak = 1
+        
+        # Apply streak bonus multiplier (e.g., 5% bonus per streak day, max 50%)
+        streak_multiplier = min(1.0 + (current_streak * 0.05), 1.5)
+        final_bonus = round(bonus * Decimal(streak_multiplier), 2)
+        
+        # Update user profile
+        profile.wallet_balance += final_bonus
+        profile.total_earnings += final_bonus
+        profile.last_daily_login = timezone.now()
+        profile.login_streak = current_streak  # Add this field to your UserProfile model
+        profile.save()
+        
+        # Create transaction
+        transaction = Transaction.objects.create(
+            user=user,
+            amount=final_bonus,
+            transaction_type='daily_login',
+            description=f'Daily login bonus - {profile.package.name if profile.package else "Basic"} (Streak: {current_streak} days)'
+        )
+        
+        # Create game participation record
+        game = GameParticipation.objects.create(
+            user=user,
+            game_type='daily_login',
+            reward_earned=final_bonus,
+            game_data={
+                'type': 'daily_login', 
+                'base_bonus': float(bonus),
+                'streak_multiplier': streak_multiplier,
+                'final_bonus': float(final_bonus),
+                'streak_count': current_streak
+            }
+        )
+        
+        return Response({
+            'success': True,
+            'bonus_amount': float(final_bonus),
+            'base_bonus': float(bonus),
+            'streak_multiplier': streak_multiplier,
+            'streak_count': current_streak,
+            'message': f'₦{final_bonus} daily login bonus added to your wallet! (Streak: {current_streak} days)',
+            'game_id': game.id
+        })

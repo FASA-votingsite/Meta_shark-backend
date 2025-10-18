@@ -10,9 +10,8 @@ router.register(r'content', views.ContentSubmissionViewSet, basename='content')
 router.register(r'referrals', views.ReferralViewSet, basename='referral')
 router.register(r'withdrawals', views.WithdrawalViewSet, basename='withdrawal')
 router.register(r'transactions', views.TransactionViewSet, basename='transaction')
-router.register(r'games', views.GameParticipationViewSet, basename='gameparticipation')
-router.register(r'games', views.GameViewSet, basename='game')
-
+router.register(r'game-participations', views.GameParticipationViewSet, basename='gameparticipation')
+# Removed duplicate 'games' registration - using custom view instead
 
 urlpatterns = [
     # Authentication endpoints
@@ -22,10 +21,21 @@ urlpatterns = [
     path('api/auth/verify-token/', views.verify_token, name='verify-token'),
     path('api/auth/token/refresh/', views.TokenRefreshView.as_view(), name='token_refresh'),
     
-    # Other API endpoints
+    # Dashboard & User endpoints
     path('api/dashboard/', views.DashboardView.as_view(), name='dashboard'),
-    path('api/daily-login/', views.DailyLoginView.as_view(), name='daily-login'),
     path('api/profile/', views.ProfileView.as_view(), name='profile'),
     path('api/wallet/balance/', views.WalletView.as_view(), name='wallet-balance'),
+    
+    # Daily Login endpoint
+    path('api/daily-login/', views.DailyLoginView.as_view(), name='daily-login'),
+    
+    # Games endpoints
+    path('api/games/play/', views.GameViewSet.as_view({'post': 'play'}), name='play-game'),
+    path('api/games/history/', views.GameHistoryView.as_view(), name='game-history'),
+    
+    # Referral stats endpoint
+    path('api/referrals/stats/', views.ReferralViewSet.as_view({'get': 'stats'}), name='referral-stats'),
+    
+    # Include router URLs last
     path('api/', include(router.urls)),
 ]

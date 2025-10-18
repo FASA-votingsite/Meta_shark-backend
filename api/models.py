@@ -53,6 +53,7 @@ class UserProfile(models.Model):
     approved_submissions = models.IntegerField(default=0)
     last_daily_login = models.DateTimeField(null=True, blank=True)
     last_daily_game = models.DateTimeField(null=True, blank=True)
+    login_streak = models.IntegerField(default=0)  
     
     def save(self, *args, **kwargs):
         if not self.referral_code:
