@@ -147,17 +147,25 @@ class Referral(models.Model):
     referral_date = models.DateTimeField(auto_now_add=True)
     reward_earned = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     is_paid = models.BooleanField(default=False)
+    referee_package = models.CharField(max_length=20, choices=Package.PACKAGE_TYPES, null=True, blank=True)  # Add this field
     
     class Meta:
         unique_together = ('referrer', 'referee')
     
     def save(self, *args, **kwargs):
         if not self.pk and not self.reward_earned:  # New referral
-            referrer_profile = self.referrer.userprofile
-            if referrer_profile.package:
-                self.reward_earned = referrer_profile.package.referral_bonus
+            # Get referee's package type
+            if self.referee.userprofile.package:
+                self.referee_package = self.referee.userprofile.package.package_type
                 
-                # Add to referrer's wallet
+                # Set fixed bonus based on referee's package
+                if self.referee_package == 'pro':
+                    self.reward_earned = Decimal('4000.00')  # ₦4000 for Pro referral
+                elif self.referee_package == 'silver':
+                    self.reward_earned = Decimal('3000.00')  # ₦3000 for Silver referral
+                
+                # Add to referrer's wallet and total earnings
+                referrer_profile = self.referrer.userprofile
                 referrer_profile.wallet_balance += self.reward_earned
                 referrer_profile.total_earnings += self.reward_earned
                 referrer_profile.save()
@@ -167,13 +175,13 @@ class Referral(models.Model):
                     user=self.referrer,
                     amount=self.reward_earned,
                     transaction_type='referral',
-                    description=f'Referral bonus for {self.referee.username}'
+                    description=f'Referral bonus for {self.referee.username} ({self.referee_package.title()} package)'
                 )
         
         super().save(*args, **kwargs)
     
     def __str__(self):
-        return f"{self.referrer.username} → {self.referee.username}"
+        return f"{self.referrer.username} → {self.referee.username} ({self.referee_package})"
 
 class GameParticipation(models.Model):
     GAME_CHOICES = [
