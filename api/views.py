@@ -324,7 +324,7 @@ class DashboardView(APIView):
             
             # Calculate earnings breakdown from transactions (only positive amounts)
             earnings_breakdown = {
-                'content': total_content_earnings,  # Use actual content earnings
+                'content': Decimal('0'),
                 'referrals': Decimal('0'),
                 'games': Decimal('0'),
                 'daily_login': Decimal('0')
@@ -334,25 +334,23 @@ class DashboardView(APIView):
                 if transaction.transaction_type in earnings_breakdown:
                     earnings_breakdown[transaction.transaction_type] += transaction.amount
             
-            # Verify that total_earnings matches the sum of all earnings
-            calculated_total_earnings = (
-                earnings_breakdown['content'] +
-                earnings_breakdown['referrals'] +
-                earnings_breakdown['games'] +
-                earnings_breakdown['daily_login']
-            )
+            # Use profile.total_earnings as the source of truth
+            # Don't try to recalculate it as it might include manual adjustments
+            total_balance = profile.total_earnings
             
-            # If there's a discrepancy, use the calculated total
-            if profile.total_earnings != calculated_total_earnings:
-                print(f"⚠️ Total earnings mismatch: Profile={profile.total_earnings}, Calculated={calculated_total_earnings}")
-                # You might want to sync this in production
+            # Safe referral total calculation
+            try:
+                referral_total = float(sum([r.reward_earned for r in referrals]))
+            except Exception as e:
+                print(f"⚠️ Error calculating referral total: {e}")
+                referral_total = float(earnings_breakdown['referrals'])
             
             recent_submissions = submissions.order_by('-submission_date')[:10]
             
             data = {
                 'wallet_balance': float(profile.wallet_balance),
-                'total_earnings': float(profile.total_earnings),
-                'total_balance': float(profile.total_earnings),  # Use profile total_earnings
+                'total_earnings': float(total_balance),
+                'total_balance': float(total_balance),
                 'package': PackageSerializer(profile.package).data if profile.package else None,
                 'submission_count': submissions.count(),
                 'referral_count': referrals.count(),
@@ -365,10 +363,10 @@ class DashboardView(APIView):
                 ).data,
                 'referral_stats': {
                     'total_referrals': referrals.count(),
-                    'total_earned': float(sum([r.reward_earned for r in referrals]))
+                    'total_earned': referral_total
                 },
                 'earnings_breakdown': {
-                    'content': float(earnings_breakdown['content']),
+                    'content': float(total_content_earnings),
                     'referrals': float(earnings_breakdown['referrals']),
                     'games': float(earnings_breakdown['games']),
                     'daily_login': float(earnings_breakdown['daily_login'])
@@ -400,7 +398,8 @@ class DashboardView(APIView):
                 {"error": f"Failed to load dashboard data: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-                    
+        
+                            
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -626,7 +625,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             if not user.check_password(password):
                 print("❌ Invalid password")
                 return Response(
-                    {"error": "Invalid password"}, 
+                    {"error": "Invalid password. Please check your password and try again."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
@@ -658,13 +657,12 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
             
-            # Create withdrawal request
+            # Create withdrawal request with user explicitly set
             withdrawal_data = {
                 'amount': amount,
                 'bank_name': request.data.get('bank_name'),
                 'account_number': request.data.get('account_number'),
                 'account_name': request.data.get('account_name'),
-                'user': user
             }
             
             print(f"🔍 Withdrawal data: {withdrawal_data}")
@@ -673,31 +671,33 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             if not serializer.is_valid():
                 print(f"❌ Serializer errors: {serializer.errors}")
                 return Response(
-                    {"error": f"Validation error: {serializer.errors}"}, 
+                    {"error": f"Validation error: {', '.join([str(error) for error in serializer.errors.values()])}"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             print("✅ Serializer is valid")
             
-            # Deduct amount from wallet
+            # Deduct amount from wallet BEFORE creating withdrawal
             profile.wallet_balance -= amount
             profile.save()
+            print(f"✅ Wallet updated. New balance: {profile.wallet_balance}")
+            
+            # Create withdrawal with user explicitly set
+            withdrawal = serializer.save(user=user)
+            print(f"✅ Withdrawal created successfully: {withdrawal.id}")
             
             # Create transaction record
             Transaction.objects.create(
                 user=user,
-                amount=-amount,  # Negative amount for withdrawal
+                amount=-amount,
                 transaction_type='payout',
                 description=f'Withdrawal to {request.data.get("bank_name")} - {request.data.get("account_number")}'
             )
-            
-            withdrawal = serializer.save()
-            
-            print(f"✅ Withdrawal created successfully: {withdrawal.id}")
+            print("✅ Transaction record created")
             
             return Response({
                 'success': True,
-                'message': f'Withdrawal request of ₦{amount} submitted successfully',
+                'message': f'Withdrawal request of ₦{amount} submitted successfully!',
                 'withdrawal_id': withdrawal.id,
                 'new_balance': float(profile.wallet_balance)
             }, status=status.HTTP_201_CREATED)
@@ -706,11 +706,18 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             print(f"❌ Withdrawal error: {str(e)}")
             import traceback
             traceback.print_exc()
+            # Return user-friendly error message
+            error_message = str(e)
+            if 'NOT NULL constraint' in error_message:
+                error_message = "System error: Could not process withdrawal. Please try again."
+            elif 'password' in error_message.lower():
+                error_message = "Invalid password. Please check your password and try again."
+            
             return Response(
-                {"error": f"Withdrawal failed: {str(e)}"}, 
+                {"error": error_message}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+        
 class GameViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
     

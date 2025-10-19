@@ -68,7 +68,7 @@ class UserProfile(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.package.name if self.package else 'No Package'}"
 
-class ContentSubmission(models.Model):
+"""class ContentSubmission(models.Model):
     PLATFORM_CHOICES = [
         ('tiktok', 'TikTok'),
         ('instagram', 'Instagram'),
@@ -139,7 +139,72 @@ class ContentSubmission(models.Model):
         super().save(*args, **kwargs)
     
     def __str__(self):
+        return f"{self.user.username} - {self.platform}" 
+        """
+
+class ContentSubmission(models.Model):
+    PLATFORM_CHOICES = [
+        ('tiktok', 'TikTok'),
+        ('instagram', 'Instagram'),
+        ('facebook', 'Facebook'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('paid', 'Paid'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES)
+    video_url = models.URLField()
+    description = models.TextField(blank=True)
+    submission_date = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    earnings = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    review_notes = models.TextField(blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        
+        # Update user's total submissions count when new submission is created
+        if is_new:
+            profile = self.user.userprofile
+            profile.total_submissions += 1
+            profile.save()
+        
+        # Handle approval - ADMIN WILL SET EARNINGS MANUALLY
+        if self.status == 'approved' and not self.approved_at:
+            self.approved_at = timezone.now()
+            # Earnings will be set by admin in Django admin
+            # Don't auto-calculate earnings here
+        
+        # Handle payment - Add to wallet when marked as paid
+        if self.status == 'paid' and not self.paid_at:
+            self.paid_at = timezone.now()
+            # Add earnings to wallet and total_earnings
+            if self.earnings > 0:
+                profile = self.user.userprofile
+                profile.wallet_balance += self.earnings
+                profile.total_earnings += self.earnings
+                profile.save()
+                
+                # Create transaction record
+                Transaction.objects.create(
+                    user=self.user,
+                    amount=self.earnings,
+                    transaction_type='content',
+                    description=f'{self.get_platform_display()} video payment'
+                )
+        
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
         return f"{self.user.username} - {self.platform}"
+
     
 class Referral(models.Model):
     referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_made')
