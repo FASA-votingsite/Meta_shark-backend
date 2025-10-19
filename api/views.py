@@ -73,13 +73,21 @@ class AuthView(APIView):
                 # Handle referral if provided
                 if data.get('referrer'):
                     referrer = data['referrer']
-                    referral_bonus = referrer.userprofile.package.referral_bonus if referrer.userprofile.package else Decimal('4000')
+                    
+                    # Fixed referral bonuses based on referee's package
+                    if package.package_type == 'pro':
+                        referral_bonus = Decimal('4000.00')  # ₦4000 for Pro referral
+                    elif package.package_type == 'silver':
+                        referral_bonus = Decimal('3000.00')  # ₦3000 for Silver referral
+                    else:
+                        referral_bonus = Decimal('2000.00')  # Default for other packages
                     
                     # Create referral record
                     referral = Referral.objects.create(
                         referrer=referrer,
                         referee=user,
-                        reward_earned=referral_bonus
+                        reward_earned=referral_bonus,
+                        referee_package=package.package_type
                     )
                     
                     # Add referral bonus to referrer's wallet
@@ -93,7 +101,7 @@ class AuthView(APIView):
                         user=referrer,
                         amount=referral_bonus,
                         transaction_type='referral',
-                        description=f'Referral bonus for {user.username}'
+                        description=f'Referral bonus for {user.username} ({package.package_type.title()} package)'
                     )
                     
                     print(f"✅ Referral created for: {referrer.username} with bonus: ₦{referral_bonus}")
@@ -151,19 +159,27 @@ class LoginView(APIView):
         username = serializer.validated_data['username']
         password = serializer.validated_data['password']
         phone_number = serializer.validated_data.get('phone_number', '')
+        whatsapp_number = serializer.validated_data.get('whatsapp_number', '')  # Added whatsapp_number
         
         # Authenticate user
         user = authenticate(username=username, password=password)
         
         if user is not None:
-            # Update phone number if provided
-            if phone_number:
+            # Update phone number or whatsapp number if provided
+            if phone_number or whatsapp_number:
                 try:
                     profile = user.userprofile
-                    profile.phone_number = phone_number
+                    if phone_number:
+                        profile.phone_number = phone_number
+                    if whatsapp_number:
+                        profile.whatsapp_number = whatsapp_number
                     profile.save()
                 except UserProfile.DoesNotExist:
-                    UserProfile.objects.create(user=user, phone_number=phone_number)
+                    UserProfile.objects.create(
+                        user=user, 
+                        phone_number=phone_number,
+                        whatsapp_number=whatsapp_number
+                    )
             
             # Get or create user profile
             profile, created = UserProfile.objects.get_or_create(user=user)
@@ -179,6 +195,7 @@ class LoginView(APIView):
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'phone_number': profile.phone_number,
+                'whatsapp_number': profile.whatsapp_number,
                 'wallet_balance': float(profile.wallet_balance),
                 'total_earnings': float(profile.total_earnings),
                 'referral_code': profile.referral_code,
@@ -289,7 +306,7 @@ class DashboardView(APIView):
                 ContentSubmissionSerializer
             )
             
-            # Calculate platform-specific earnings
+            # Calculate platform-specific earnings from APPROVED/PAID submissions
             platform_earnings = {
                 'tiktok': Decimal('0'),
                 'instagram': Decimal('0'),
@@ -302,9 +319,12 @@ class DashboardView(APIView):
                 if platform in platform_earnings:
                     platform_earnings[platform] += submission.earnings
             
+            # Calculate total content earnings (sum of all platforms)
+            total_content_earnings = sum(platform_earnings.values())
+            
             # Calculate earnings breakdown from transactions (only positive amounts)
             earnings_breakdown = {
-                'content': Decimal('0'),
+                'content': total_content_earnings,  # Use actual content earnings
                 'referrals': Decimal('0'),
                 'games': Decimal('0'),
                 'daily_login': Decimal('0')
@@ -314,16 +334,25 @@ class DashboardView(APIView):
                 if transaction.transaction_type in earnings_breakdown:
                     earnings_breakdown[transaction.transaction_type] += transaction.amount
             
-            total_content_earnings = sum(platform_earnings.values())
+            # Verify that total_earnings matches the sum of all earnings
+            calculated_total_earnings = (
+                earnings_breakdown['content'] +
+                earnings_breakdown['referrals'] +
+                earnings_breakdown['games'] +
+                earnings_breakdown['daily_login']
+            )
+            
+            # If there's a discrepancy, use the calculated total
+            if profile.total_earnings != calculated_total_earnings:
+                print(f"⚠️ Total earnings mismatch: Profile={profile.total_earnings}, Calculated={calculated_total_earnings}")
+                # You might want to sync this in production
+            
             recent_submissions = submissions.order_by('-submission_date')[:10]
             
-            # Use total_earnings as the main balance
-            total_balance = profile.total_earnings
-            
             data = {
-                'wallet_balance': float(profile.wallet_balance),  # Available for withdrawal
-                'total_earnings': float(total_balance),  # Total Balance = All earnings
-                'total_balance': float(total_balance),  # Add this for frontend clarity
+                'wallet_balance': float(profile.wallet_balance),
+                'total_earnings': float(profile.total_earnings),
+                'total_balance': float(profile.total_earnings),  # Use profile total_earnings
                 'package': PackageSerializer(profile.package).data if profile.package else None,
                 'submission_count': submissions.count(),
                 'referral_count': referrals.count(),
@@ -339,7 +368,7 @@ class DashboardView(APIView):
                     'total_earned': float(sum([r.reward_earned for r in referrals]))
                 },
                 'earnings_breakdown': {
-                    'content': float(total_content_earnings),
+                    'content': float(earnings_breakdown['content']),
                     'referrals': float(earnings_breakdown['referrals']),
                     'games': float(earnings_breakdown['games']),
                     'daily_login': float(earnings_breakdown['daily_login'])
@@ -371,7 +400,7 @@ class DashboardView(APIView):
                 {"error": f"Failed to load dashboard data: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
+                    
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -386,14 +415,16 @@ class DailyLoginView(APIView):
                 'error': 'Daily login bonus already claimed today'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Calculate base bonus based on package
+        # Calculate base bonus based on package - FIXED AMOUNTS
         if profile.package:
             if profile.package.package_type == 'pro':
-                base_bonus = Decimal('1000')  # Pro package gets ₦1000
+                base_bonus = Decimal('1000.00')  # Pro package gets exactly ₦1000
             elif profile.package.package_type == 'silver':
-                base_bonus = Decimal('700')   # Silver package gets ₦700
+                base_bonus = Decimal('700.00')   # Silver package gets exactly ₦700
+            else:
+                base_bonus = Decimal('500.00')   # Default for any other package
         else:
-            base_bonus = Decimal('500')  # Default bonus for no package
+            base_bonus = Decimal('500.00')  # Default bonus for no package
         
         # Calculate streak
         yesterday = today - timedelta(days=1)
@@ -410,13 +441,12 @@ class DailyLoginView(APIView):
                     'error': 'Daily login bonus already claimed today'
                 }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Apply streak bonus multiplier (5% per day, max 50%)
-        streak_multiplier = min(1.0 + (current_streak * 0.05), 1.5)
-        final_bonus = round(base_bonus * Decimal(streak_multiplier), 2)
+        # NO streak bonus multiplier - use exact base amounts
+        final_bonus = base_bonus  # Remove streak multiplier
         
         # Update user profile - add to BOTH wallet_balance AND total_earnings
         profile.wallet_balance += final_bonus
-        profile.total_earnings += final_bonus  # This ensures it reflects in Total Balance
+        profile.total_earnings += final_bonus
         profile.last_daily_login = timezone.now()
         profile.login_streak = current_streak
         profile.save()
@@ -426,7 +456,7 @@ class DailyLoginView(APIView):
             user=user,
             amount=final_bonus,
             transaction_type='daily_login',
-            description=f'Daily login bonus (Streak: {current_streak} days)'
+            description=f'Daily login bonus - {profile.package.name if profile.package else "Basic"}'
         )
         
         # Create game participation record
@@ -437,7 +467,6 @@ class DailyLoginView(APIView):
             game_data={
                 'type': 'daily_login', 
                 'base_bonus': float(base_bonus),
-                'streak_multiplier': streak_multiplier,
                 'final_bonus': float(final_bonus),
                 'streak_count': current_streak,
                 'package_type': profile.package.package_type if profile.package else 'none'
@@ -448,10 +477,9 @@ class DailyLoginView(APIView):
             'success': True,
             'bonus_amount': float(final_bonus),
             'base_bonus': float(base_bonus),
-            'streak_multiplier': streak_multiplier,
             'streak_count': current_streak,
             'package_type': profile.package.package_type if profile.package else 'none',
-            'message': f'₦{final_bonus} daily login bonus added to your wallet! (Streak: {current_streak} days)',
+            'message': f'₦{final_bonus} daily login bonus added to your wallet!',
             'game_id': game.id
         })
     
@@ -584,6 +612,8 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             password = request.data.get('password')
             amount = Decimal(request.data.get('amount', 0))
             
+            print(f"🔍 Withdrawal request data: {request.data}")
+            
             # Verify password
             if not password:
                 return Response(
@@ -601,7 +631,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             profile = user.userprofile
             if amount > profile.wallet_balance:
                 return Response(
-                    {"error": "Insufficient balance"}, 
+                    {"error": f"Insufficient balance. Available: ₦{profile.wallet_balance}"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
@@ -610,6 +640,15 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                     {"error": "Minimum withdrawal amount is ₦1,000"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            # Validate other required fields
+            required_fields = ['bank_name', 'account_number', 'account_name']
+            for field in required_fields:
+                if not request.data.get(field):
+                    return Response(
+                        {"error": f"{field.replace('_', ' ').title()} is required"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             # Create withdrawal request
             withdrawal_data = {
@@ -632,7 +671,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                 user=user,
                 amount=-amount,  # Negative amount for withdrawal
                 transaction_type='payout',
-                description=f'Withdrawal to {request.data.get("bank_name")}'
+                description=f'Withdrawal to {request.data.get("bank_name")} - {request.data.get("account_number")}'
             )
             
             withdrawal = serializer.save()
@@ -640,11 +679,20 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             return Response({
                 'success': True,
                 'message': f'Withdrawal request of ₦{amount} submitted successfully',
-                'withdrawal_id': withdrawal.id
+                'withdrawal_id': withdrawal.id,
+                'new_balance': float(profile.wallet_balance)
             }, status=status.HTTP_201_CREATED)
             
+        except serializers.ValidationError as e:
+            print(f"❌ Withdrawal validation error: {e.detail}")
+            return Response(
+                {"error": f"Validation error: {e.detail}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             print(f"❌ Withdrawal error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return Response(
                 {"error": f"Withdrawal failed: {str(e)}"}, 
                 status=status.HTTP_400_BAD_REQUEST
@@ -779,4 +827,3 @@ class GameHistoryView(APIView):
                 {"error": f"Failed to fetch game history: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
