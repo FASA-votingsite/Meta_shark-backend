@@ -128,7 +128,9 @@ class SignupSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
-
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    whatsapp_number = serializers.CharField(required=False, allow_blank=True)  # Add this
+    
 class DailyLoginSerializer(serializers.Serializer):
     pass
 

@@ -286,7 +286,7 @@ class DashboardView(APIView):
             # Import serializers here to avoid circular imports
             from .serializers import (
                 PackageSerializer, TransactionSerializer, 
-                ContentSubmissionSerializer, UserProfileSerializer
+                ContentSubmissionSerializer
             )
             
             # Calculate platform-specific earnings
@@ -302,7 +302,7 @@ class DashboardView(APIView):
                 if platform in platform_earnings:
                     platform_earnings[platform] += submission.earnings
             
-            # Calculate earnings breakdown
+            # Calculate earnings breakdown from transactions (only positive amounts)
             earnings_breakdown = {
                 'content': Decimal('0'),
                 'referrals': Decimal('0'),
@@ -317,9 +317,13 @@ class DashboardView(APIView):
             total_content_earnings = sum(platform_earnings.values())
             recent_submissions = submissions.order_by('-submission_date')[:10]
             
+            # Use total_earnings as the main balance
+            total_balance = profile.total_earnings
+            
             data = {
-                'wallet_balance': float(profile.wallet_balance),
-                'total_earnings': float(profile.total_earnings),
+                'wallet_balance': float(profile.wallet_balance),  # Available for withdrawal
+                'total_earnings': float(total_balance),  # Total Balance = All earnings
+                'total_balance': float(total_balance),  # Add this for frontend clarity
                 'package': PackageSerializer(profile.package).data if profile.package else None,
                 'submission_count': submissions.count(),
                 'referral_count': referrals.count(),
@@ -366,8 +370,7 @@ class DashboardView(APIView):
             return Response(
                 {"error": f"Failed to load dashboard data: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )        
-
+            )
         
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
@@ -383,41 +386,75 @@ class DailyLoginView(APIView):
                 'error': 'Daily login bonus already claimed today'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Calculate bonus based on package
+        # Calculate base bonus based on package
         if profile.package:
-            bonus = profile.package.daily_login_bonus
+            if profile.package.package_type == 'pro':
+                base_bonus = Decimal('1000')  # Pro package gets ₦1000
+            elif profile.package.package_type == 'silver':
+                base_bonus = Decimal('700')   # Silver package gets ₦700
         else:
-            bonus = Decimal('500')  # Default bonus for no package
+            base_bonus = Decimal('500')  # Default bonus for no package
         
-        # Add bonus to wallet
-        profile.wallet_balance += bonus
-        profile.total_earnings += bonus
+        # Calculate streak
+        yesterday = today - timedelta(days=1)
+        current_streak = 1
+        
+        if profile.last_daily_login:
+            last_login_date = profile.last_daily_login.date()
+            if last_login_date == yesterday:
+                # Consecutive login - increment streak
+                current_streak = getattr(profile, 'login_streak', 0) + 1
+            elif last_login_date == today:
+                # Already claimed today
+                return Response({
+                    'error': 'Daily login bonus already claimed today'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Apply streak bonus multiplier (5% per day, max 50%)
+        streak_multiplier = min(1.0 + (current_streak * 0.05), 1.5)
+        final_bonus = round(base_bonus * Decimal(streak_multiplier), 2)
+        
+        # Update user profile - add to BOTH wallet_balance AND total_earnings
+        profile.wallet_balance += final_bonus
+        profile.total_earnings += final_bonus  # This ensures it reflects in Total Balance
         profile.last_daily_login = timezone.now()
+        profile.login_streak = current_streak
         profile.save()
         
         # Create transaction
-        transaction = Transaction.objects.create(
+        Transaction.objects.create(
             user=user,
-            amount=bonus,
+            amount=final_bonus,
             transaction_type='daily_login',
-            description=f'Daily login bonus - {profile.package.name if profile.package else "Basic"}'
+            description=f'Daily login bonus (Streak: {current_streak} days)'
         )
         
         # Create game participation record
         game = GameParticipation.objects.create(
             user=user,
             game_type='daily_login',
-            reward_earned=bonus,
-            game_data={'type': 'daily_login', 'bonus_amount': float(bonus)}
+            reward_earned=final_bonus,
+            game_data={
+                'type': 'daily_login', 
+                'base_bonus': float(base_bonus),
+                'streak_multiplier': streak_multiplier,
+                'final_bonus': float(final_bonus),
+                'streak_count': current_streak,
+                'package_type': profile.package.package_type if profile.package else 'none'
+            }
         )
         
         return Response({
             'success': True,
-            'bonus_amount': float(bonus),
-            'message': f'₦{bonus} daily login bonus added to your wallet!',
+            'bonus_amount': float(final_bonus),
+            'base_bonus': float(base_bonus),
+            'streak_multiplier': streak_multiplier,
+            'streak_count': current_streak,
+            'package_type': profile.package.package_type if profile.package else 'none',
+            'message': f'₦{final_bonus} daily login bonus added to your wallet! (Streak: {current_streak} days)',
             'game_id': game.id
         })
-
+    
 # ViewSets
 class CouponViewSet(viewsets.ModelViewSet):
     queryset = Coupon.objects.all()
@@ -515,23 +552,14 @@ class ProfileView(APIView):
     def get(self, request):
         try:
             profile = request.user.userprofile
-            # Make sure the serializer includes all required fields
-            from .serializers import UserProfileSerializer
             serializer = UserProfileSerializer(profile)
             return Response(serializer.data)
         except UserProfile.DoesNotExist:
-            # Create profile if it doesn't exist
-            profile = UserProfile.objects.create(user=request.user)
-            serializer = UserProfileSerializer(profile)
-            return Response(serializer.data)
+            return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             print(f"❌ Profile fetch error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return Response(
-                {"error": f"Failed to fetch profile: {str(e)}"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": "Failed to fetch profile"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 
 class WalletView(APIView):
     permission_classes = [IsAuthenticated]
@@ -550,8 +578,77 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return WithdrawalRequest.objects.filter(user=self.request.user)
     
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+    def create(self, request, *args, **kwargs):
+        try:
+            user = request.user
+            password = request.data.get('password')
+            amount = Decimal(request.data.get('amount', 0))
+            
+            # Verify password
+            if not password:
+                return Response(
+                    {"error": "Password is required to process withdrawal"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not user.check_password(password):
+                return Response(
+                    {"error": "Invalid password"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user has sufficient balance
+            profile = user.userprofile
+            if amount > profile.wallet_balance:
+                return Response(
+                    {"error": "Insufficient balance"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if amount < Decimal('1000'):
+                return Response(
+                    {"error": "Minimum withdrawal amount is ₦1,000"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create withdrawal request
+            withdrawal_data = {
+                'amount': amount,
+                'bank_name': request.data.get('bank_name'),
+                'account_number': request.data.get('account_number'),
+                'account_name': request.data.get('account_name'),
+                'user': user
+            }
+            
+            serializer = self.get_serializer(data=withdrawal_data)
+            serializer.is_valid(raise_exception=True)
+            
+            # Deduct amount from wallet
+            profile.wallet_balance -= amount
+            profile.save()
+            
+            # Create transaction record
+            Transaction.objects.create(
+                user=user,
+                amount=-amount,  # Negative amount for withdrawal
+                transaction_type='payout',
+                description=f'Withdrawal to {request.data.get("bank_name")}'
+            )
+            
+            withdrawal = serializer.save()
+            
+            return Response({
+                'success': True,
+                'message': f'Withdrawal request of ₦{amount} submitted successfully',
+                'withdrawal_id': withdrawal.id
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            print(f"❌ Withdrawal error: {str(e)}")
+            return Response(
+                {"error": f"Withdrawal failed: {str(e)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class TransactionViewSet(viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
@@ -664,22 +761,6 @@ class GameViewSet(viewsets.ViewSet):
         return names.get(game_type, game_type)
     
 
-# Add this after the existing views
-
-class ProfileView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        try:
-            profile = request.user.userprofile
-            serializer = UserProfileSerializer(profile)
-            return Response(serializer.data)
-        except UserProfile.DoesNotExist:
-            return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            print(f"❌ Profile fetch error: {str(e)}")
-            return Response({"error": "Failed to fetch profile"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 class GameHistoryView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -699,88 +780,3 @@ class GameHistoryView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-# Enhanced DailyLoginView with streak tracking
-class DailyLoginView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        user = request.user
-        profile = user.userprofile
-        
-        # Check if user already claimed today
-        today = timezone.now().date()
-        if profile.last_daily_login and profile.last_daily_login.date() == today:
-            return Response({
-                'error': 'Daily login bonus already claimed today'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Calculate bonus based on package
-        if profile.package:
-            bonus = profile.package.daily_login_bonus
-        else:
-            bonus = Decimal('500')  # Default bonus for no package
-        
-        # Calculate streak
-        yesterday = today - timedelta(days=1)
-        streak_broken = True
-        
-        if profile.last_daily_login:
-            last_login_date = profile.last_daily_login.date()
-            if last_login_date == yesterday:
-                # Consecutive login - increment streak
-                current_streak = getattr(profile, 'login_streak', 0) + 1
-                streak_broken = False
-            elif last_login_date == today:
-                # Already claimed today
-                return Response({
-                    'error': 'Daily login bonus already claimed today'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                # Streak broken
-                current_streak = 1
-        else:
-            # First time login
-            current_streak = 1
-        
-        # Apply streak bonus multiplier (e.g., 5% bonus per streak day, max 50%)
-        streak_multiplier = min(1.0 + (current_streak * 0.05), 1.5)
-        final_bonus = round(bonus * Decimal(streak_multiplier), 2)
-        
-        # Update user profile
-        profile.wallet_balance += final_bonus
-        profile.total_earnings += final_bonus
-        profile.last_daily_login = timezone.now()
-        profile.login_streak = current_streak  # Add this field to your UserProfile model
-        profile.save()
-        
-        # Create transaction
-        transaction = Transaction.objects.create(
-            user=user,
-            amount=final_bonus,
-            transaction_type='daily_login',
-            description=f'Daily login bonus - {profile.package.name if profile.package else "Basic"} (Streak: {current_streak} days)'
-        )
-        
-        # Create game participation record
-        game = GameParticipation.objects.create(
-            user=user,
-            game_type='daily_login',
-            reward_earned=final_bonus,
-            game_data={
-                'type': 'daily_login', 
-                'base_bonus': float(bonus),
-                'streak_multiplier': streak_multiplier,
-                'final_bonus': float(final_bonus),
-                'streak_count': current_streak
-            }
-        )
-        
-        return Response({
-            'success': True,
-            'bonus_amount': float(final_bonus),
-            'base_bonus': float(bonus),
-            'streak_multiplier': streak_multiplier,
-            'streak_count': current_streak,
-            'message': f'₦{final_bonus} daily login bonus added to your wallet! (Streak: {current_streak} days)',
-            'game_id': game.id
-        })
