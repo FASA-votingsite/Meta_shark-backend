@@ -169,6 +169,15 @@ class ContentSubmission(models.Model):
     
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+        old_status = None
+        
+        # Get old status if updating
+        if not is_new:
+            try:
+                old_instance = ContentSubmission.objects.get(pk=self.pk)
+                old_status = old_instance.status
+            except ContentSubmission.DoesNotExist:
+                pass
         
         # Update user's total submissions count when new submission is created
         if is_new:
@@ -176,20 +185,15 @@ class ContentSubmission(models.Model):
             profile.total_submissions += 1
             profile.save()
         
-        # Handle approval - ADMIN WILL SET EARNINGS MANUALLY
-        if self.status == 'approved' and not self.approved_at:
+        # Handle approval - ADD TO TOTAL EARNINGS WHEN APPROVED
+        if self.status == 'approved' and old_status != 'approved':
             self.approved_at = timezone.now()
-            # Earnings will be set by admin in Django admin
-            # Don't auto-calculate earnings here
-        
-        # Handle payment - Add to wallet when marked as paid
-        if self.status == 'paid' and not self.paid_at:
-            self.paid_at = timezone.now()
-            # Add earnings to wallet and total_earnings
+            
+            # Only add to total_earnings if this is a new approval
             if self.earnings > 0:
                 profile = self.user.userprofile
-                profile.wallet_balance += self.earnings
-                profile.total_earnings += self.earnings
+                profile.total_earnings += self.earnings  # ADD TO TOTAL EARNINGS
+                profile.approved_submissions += 1
                 profile.save()
                 
                 # Create transaction record
@@ -197,14 +201,24 @@ class ContentSubmission(models.Model):
                     user=self.user,
                     amount=self.earnings,
                     transaction_type='content',
-                    description=f'{self.get_platform_display()} video payment'
+                    description=f'{self.get_platform_display()} video approved'
                 )
+                print(f"✅ Added ₦{self.earnings} to total earnings for {self.user.username}'s {self.platform} video")
+        
+        # Handle payment - Add to wallet when marked as paid
+        if self.status == 'paid' and old_status != 'paid':
+            self.paid_at = timezone.now()
+            # Add earnings to wallet (total_earnings was already added in approval)
+            if self.earnings > 0:
+                profile = self.user.userprofile
+                profile.wallet_balance += self.earnings
+                profile.save()
+                print(f"✅ Added ₦{self.earnings} to wallet for {self.user.username}'s {self.platform} video")
         
         super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.user.username} - {self.platform}"
-
     
 class Referral(models.Model):
     referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_made')

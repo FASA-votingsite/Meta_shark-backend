@@ -314,13 +314,16 @@ class DashboardView(APIView):
             }
             
             approved_submissions = submissions.filter(status__in=['approved', 'paid'])
+            total_platform_earnings = Decimal('0')
+            
             for submission in approved_submissions:
                 platform = submission.platform.lower()
                 if platform in platform_earnings:
                     platform_earnings[platform] += submission.earnings
+                    total_platform_earnings += submission.earnings
             
-            # Calculate total content earnings (sum of all platforms)
-            total_content_earnings = sum(platform_earnings.values())
+            print(f"💰 Platform earnings - TikTok: {platform_earnings['tiktok']}, Instagram: {platform_earnings['instagram']}, Facebook: {platform_earnings['facebook']}, Total: {total_platform_earnings}")
+            print(f"💰 Profile total_earnings: {profile.total_earnings}")
             
             # Calculate earnings breakdown from transactions (only positive amounts)
             earnings_breakdown = {
@@ -335,7 +338,6 @@ class DashboardView(APIView):
                     earnings_breakdown[transaction.transaction_type] += transaction.amount
             
             # Use profile.total_earnings as the source of truth
-            # Don't try to recalculate it as it might include manual adjustments
             total_balance = profile.total_earnings
             
             # Safe referral total calculation
@@ -366,7 +368,7 @@ class DashboardView(APIView):
                     'total_earned': referral_total
                 },
                 'earnings_breakdown': {
-                    'content': float(total_content_earnings),
+                    'content': float(total_platform_earnings),  # Use actual platform earnings
                     'referrals': float(earnings_breakdown['referrals']),
                     'games': float(earnings_breakdown['games']),
                     'daily_login': float(earnings_breakdown['daily_login'])
@@ -398,8 +400,7 @@ class DashboardView(APIView):
                 {"error": f"Failed to load dashboard data: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-                            
+
 class DailyLoginView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -600,10 +601,14 @@ class WalletView(APIView):
 
 class WithdrawalViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
-    serializer_class = WithdrawalRequestSerializer
     
     def get_queryset(self):
         return WithdrawalRequest.objects.filter(user=self.request.user)
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return WithdrawalRequestCreateSerializer
+        return WithdrawalRequestSerializer
     
     def create(self, request, *args, **kwargs):
         try:
@@ -616,14 +621,12 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             
             # Verify password
             if not password:
-                print("❌ No password provided")
                 return Response(
                     {"error": "Password is required to process withdrawal"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             if not user.check_password(password):
-                print("❌ Invalid password")
                 return Response(
                     {"error": "Invalid password. Please check your password and try again."}, 
                     status=status.HTTP_400_BAD_REQUEST
@@ -634,14 +637,12 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             # Check if user has sufficient balance
             profile = user.userprofile
             if amount > profile.wallet_balance:
-                print(f"❌ Insufficient balance: {profile.wallet_balance}")
                 return Response(
                     {"error": f"Insufficient balance. Available: ₦{profile.wallet_balance}"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             if amount < Decimal('1000'):
-                print("❌ Amount below minimum")
                 return Response(
                     {"error": "Minimum withdrawal amount is ₦1,000"}, 
                     status=status.HTTP_400_BAD_REQUEST
@@ -651,36 +652,30 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             required_fields = ['bank_name', 'account_number', 'account_name']
             for field in required_fields:
                 if not request.data.get(field):
-                    print(f"❌ Missing required field: {field}")
                     return Response(
                         {"error": f"{field.replace('_', ' ').title()} is required"}, 
                         status=status.HTTP_400_BAD_REQUEST
                     )
             
-            # Create withdrawal request with user explicitly set
-            withdrawal_data = {
-                'amount': amount,
-                'bank_name': request.data.get('bank_name'),
-                'account_number': request.data.get('account_number'),
-                'account_name': request.data.get('account_name'),
-            }
-            
-            print(f"🔍 Withdrawal data: {withdrawal_data}")
-            
-            serializer = self.get_serializer(data=withdrawal_data)
+            # Use the CREATE serializer for input validation
+            serializer = self.get_serializer(data=request.data)
             if not serializer.is_valid():
-                print(f"❌ Serializer errors: {serializer.errors}")
+                error_messages = []
+                for field, errors in serializer.errors.items():
+                    for error in errors:
+                        error_messages.append(f"{field}: {error}")
                 return Response(
-                    {"error": f"Validation error: {', '.join([str(error) for error in serializer.errors.values()])}"}, 
+                    {"error": ", ".join(error_messages)}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             print("✅ Serializer is valid")
             
-            # Deduct amount from wallet BEFORE creating withdrawal
+            # DEDUCT FROM BOTH WALLET BALANCE AND TOTAL EARNINGS
             profile.wallet_balance -= amount
+            profile.total_earnings -= amount  # ADD THIS LINE - deduct from total balance too
             profile.save()
-            print(f"✅ Wallet updated. New balance: {profile.wallet_balance}")
+            print(f"✅ Wallet and total earnings updated. New wallet balance: {profile.wallet_balance}, New total earnings: {profile.total_earnings}")
             
             # Create withdrawal with user explicitly set
             withdrawal = serializer.save(user=user)
@@ -699,19 +694,17 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                 'success': True,
                 'message': f'Withdrawal request of ₦{amount} submitted successfully!',
                 'withdrawal_id': withdrawal.id,
-                'new_balance': float(profile.wallet_balance)
+                'new_balance': float(profile.wallet_balance),
+                'new_total_earnings': float(profile.total_earnings)  # Include this in response
             }, status=status.HTTP_201_CREATED)
             
         except Exception as e:
             print(f"❌ Withdrawal error: {str(e)}")
             import traceback
             traceback.print_exc()
-            # Return user-friendly error message
             error_message = str(e)
             if 'NOT NULL constraint' in error_message:
                 error_message = "System error: Could not process withdrawal. Please try again."
-            elif 'password' in error_message.lower():
-                error_message = "Invalid password. Please check your password and try again."
             
             return Response(
                 {"error": error_message}, 

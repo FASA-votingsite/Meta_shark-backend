@@ -66,12 +66,14 @@ class GameParticipationSerializer(serializers.ModelSerializer):
         read_only_fields = ('user', 'participation_date')
 
 class TransactionSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
+    # Use a simpler user representation to avoid errors
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
     
     class Meta:
         model = Transaction
-        fields = '__all__'
-        read_only_fields = ('user', 'date')
+        fields = ['id', 'user_username', 'user_email', 'amount', 'transaction_type', 'description', 'date']
+        read_only_fields = ['user_username', 'user_email', 'date']
 
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
