@@ -612,30 +612,37 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             password = request.data.get('password')
             amount = Decimal(request.data.get('amount', 0))
             
-            print(f"🔍 Withdrawal request data: {request.data}")
+            print(f"🔍 Withdrawal request received - User: {user.username}, Amount: {amount}")
+            print(f"🔍 Request data: {request.data}")
             
             # Verify password
             if not password:
+                print("❌ No password provided")
                 return Response(
                     {"error": "Password is required to process withdrawal"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             if not user.check_password(password):
+                print("❌ Invalid password")
                 return Response(
                     {"error": "Invalid password"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            print("✅ Password verified")
+            
             # Check if user has sufficient balance
             profile = user.userprofile
             if amount > profile.wallet_balance:
+                print(f"❌ Insufficient balance: {profile.wallet_balance}")
                 return Response(
                     {"error": f"Insufficient balance. Available: ₦{profile.wallet_balance}"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
             if amount < Decimal('1000'):
+                print("❌ Amount below minimum")
                 return Response(
                     {"error": "Minimum withdrawal amount is ₦1,000"}, 
                     status=status.HTTP_400_BAD_REQUEST
@@ -645,6 +652,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             required_fields = ['bank_name', 'account_number', 'account_name']
             for field in required_fields:
                 if not request.data.get(field):
+                    print(f"❌ Missing required field: {field}")
                     return Response(
                         {"error": f"{field.replace('_', ' ').title()} is required"}, 
                         status=status.HTTP_400_BAD_REQUEST
@@ -659,8 +667,17 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                 'user': user
             }
             
+            print(f"🔍 Withdrawal data: {withdrawal_data}")
+            
             serializer = self.get_serializer(data=withdrawal_data)
-            serializer.is_valid(raise_exception=True)
+            if not serializer.is_valid():
+                print(f"❌ Serializer errors: {serializer.errors}")
+                return Response(
+                    {"error": f"Validation error: {serializer.errors}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            print("✅ Serializer is valid")
             
             # Deduct amount from wallet
             profile.wallet_balance -= amount
@@ -676,6 +693,8 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
             
             withdrawal = serializer.save()
             
+            print(f"✅ Withdrawal created successfully: {withdrawal.id}")
+            
             return Response({
                 'success': True,
                 'message': f'Withdrawal request of ₦{amount} submitted successfully',
@@ -683,12 +702,6 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                 'new_balance': float(profile.wallet_balance)
             }, status=status.HTTP_201_CREATED)
             
-        except serializers.ValidationError as e:
-            print(f"❌ Withdrawal validation error: {e.detail}")
-            return Response(
-                {"error": f"Validation error: {e.detail}"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
         except Exception as e:
             print(f"❌ Withdrawal error: {str(e)}")
             import traceback
@@ -697,23 +710,6 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
                 {"error": f"Withdrawal failed: {str(e)}"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-class TransactionViewSet(viewsets.ModelViewSet):
-    serializer_class = TransactionSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return Transaction.objects.filter(user=self.request.user)
-
-class GameParticipationViewSet(viewsets.ModelViewSet):
-    serializer_class = GameParticipationSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return GameParticipation.objects.filter(user=self.request.user)
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
 class GameViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]

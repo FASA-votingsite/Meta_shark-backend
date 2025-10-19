@@ -113,34 +113,34 @@ class ContentSubmission(models.Model):
             }
             self.earnings = platform_earnings.get(self.platform, Decimal('200'))
             
-            # Update user's approved submissions count
+            # Update user's approved submissions count AND total earnings
             profile = self.user.userprofile
             profile.approved_submissions += 1
+            profile.total_earnings += self.earnings  # ADD THIS LINE
             profile.save()
+            
+            # Create transaction record for content earnings
+            Transaction.objects.create(
+                user=self.user,
+                amount=self.earnings,
+                transaction_type='content',
+                description=f'{self.get_platform_display()} video approved'
+            )
         
-        # Handle payment
+        # Handle payment - REMOVE the wallet/total_earnings update here since it's already done in approval
         if self.status == 'paid' and not self.paid_at:
             self.paid_at = timezone.now()
-            # Add earnings to wallet
+            # Only update wallet balance (total_earnings was already updated in approval)
             if self.earnings > 0:
                 profile = self.user.userprofile
                 profile.wallet_balance += self.earnings
-                profile.total_earnings += self.earnings
                 profile.save()
-                
-                # Create transaction record
-                Transaction.objects.create(
-                    user=self.user,
-                    amount=self.earnings,
-                    transaction_type='content',
-                    description=f'{self.get_platform_display()} video payment'
-                )
         
         super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.user.username} - {self.platform}"
-
+    
 class Referral(models.Model):
     referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_made')
     referee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='referrals_received')
