@@ -22,7 +22,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'Meta@adminweb')
+SECRET_KEY = os.getenv('SECRET_KEY', 'Tyler@meta')
 
 
 # Media files (user uploaded content)
@@ -38,21 +38,20 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static')
 ]
 
-SECRET_KEY = 'your-secret-key-here'
+SECRET_KEY = 'Tyler@meta'
 
 DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = [
+    'backend.railway.app',
     'localhost',
     '127.0.0.1',
     '.onrender.com',  # Allow all Render subdomains
-    'meta-shark-backend.onrender.com'
+    'metasharkservices.com'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    'https://unpotent-cosmically-era.ngrok-free.dev',
-    'https://*.ngrok-free.dev',
-    'https://*.ngrok.io',
+    'https://backend.railway.app',
     'http://localhost:3000',  # Your React frontend URL
     'http://127.0.0.1:3000'
     "https://*.onrender.com",
@@ -196,10 +195,10 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = [
+    "https://backend.railway.app",
     "https://content-monetization-platform.netlify.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://unpotent-cosmically-era.ngrok-free.dev",
     
 ]
 
