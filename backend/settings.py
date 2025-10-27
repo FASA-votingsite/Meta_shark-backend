@@ -51,6 +51,7 @@ ALLOWED_HOSTS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
+    "https://metasharkservices.com",
     'https://backend.railway.app',
     'http://localhost:3000',  # Your React frontend URL
     'http://127.0.0.1:3000'
@@ -108,22 +109,21 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-try:
-    import dj_database_url
+if 'DATABASE_URL' in os.environ:
     DATABASES = {
         'default': dj_database_url.config(
-            default=config('DATABASE_URL', default='sqlite:///db.sqlite3'),
+            default=os.getenv('DATABASE_URL'),
             conn_max_age=600
         )
     }
-except ImportError:
-    # Fallback to SQLite if dj-database-url is not available
+else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
+
 
 """
 DATABASES = {
@@ -195,6 +195,7 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = [
+    "https://metasharkservices.com",
     "https://backend.railway.app",
     "https://content-monetization-platform.netlify.app",
     "http://localhost:3000",
